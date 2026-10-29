@@ -6,6 +6,7 @@
 - **通用 Agent Loop**：流式输出、并发工具执行、指数退避重试、上下文溢出自动压缩、steer / followUp、取消与超时、步数 / token / 成本预算、会话锁、只追加可回放日志
 - **工具管线**：zod 参数校验、策略钩子（allow / deny / ask）、审批服务、单调守卫、超时与重试、结果后处理
 - **模型接入**：OpenAI 兼容 Provider（OpenAI、DeepSeek、通义、Kimi、vLLM、SGLang、leo-inference……）+ 可测试的 MockProvider
+- **默认提示词**：内置人设、工作方式、工具规范、安全底线、输出格式，放在 [`prompts/`](prompts/README.md) 的 Markdown 模板里，可用变量、目录或按 id 覆盖
 - **开发体验**（借鉴 [pi](https://github.com/earendil-works/pi)）：一个函数就是一个插件
 
 我们只做底层；工具、记忆、渠道、编排方式由你用插件拼装，或克隆后自行定制。

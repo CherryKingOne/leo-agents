@@ -5,6 +5,7 @@ import { createConsoleLogger, type Logger, type LogLevel } from './kernel/logger
 import { definePlugin, type PluginLike } from './kernel/plugin.js'
 import type { Scope } from './kernel/types.js'
 import { llmPlugin } from './llm/service.js'
+import { type PromptsOptions, promptsPlugin } from './prompts/plugin.js'
 import type { LlmProvider } from './llm/types.js'
 import { agentLoopPlugin } from './loop/service.js'
 import type { Agent, AgentOptions } from './loop/types.js'
@@ -32,6 +33,8 @@ export interface CreateLeoOptions {
   sessions?: { dir?: string }
   tools?: ToolRegistryOptions
   context?: TokenBudgetOptions
+  /** 默认提示词（人设 / 工作方式 / 工具规范 / 安全 / 输出 / 运行环境），见 prompts/README.md；false 关闭 */
+  prompts?: PromptsOptions | false
   /** 要注册的模型提供方，第一个为默认 */
   providers?: LlmProvider[]
   /** 额外插件，按顺序加载；可以用 [plugin, config] 传配置 */
@@ -54,7 +57,7 @@ export interface Leo {
 }
 
 /**
- * 创建一个 leo 实例：内核 + 核心插件（sessions / llm / tools / context / agentLoop）+ 你的插件。
+ * 创建一个 leo 实例：内核 + 核心插件（sessions / llm / tools / context / prompts / agentLoop）+ 你的插件。
  *
  * ```ts
  * const leo = await createLeo({
@@ -76,6 +79,7 @@ export async function createLeo(opts: CreateLeoOptions = {}): Promise<Leo> {
     await root.plugin(llmPlugin)
     await root.plugin(toolsPlugin, opts.tools)
     await root.plugin(contextPlugin, opts.context)
+    if (opts.prompts !== false) await root.plugin(promptsPlugin, opts.prompts)
     await root.plugin(agentLoopPlugin)
   }
   for (const [i, p] of (opts.providers ?? []).entries()) await root.plugin(providerPlugin(p, { default: i === 0 }))

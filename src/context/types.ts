@@ -16,6 +16,8 @@ export interface AssembleInput {
   systemPrompt?: string
   /** Agent 级别的任意状态，供片段渲染使用 */
   state: Record<string, unknown>
+  /** 本次请求暴露给模型的工具（build 时填充，片段可据此决定是否注入） */
+  tools?: ToolSchema[]
 }
 
 /** system prompt 片段。插件通过 `ctx.get('context').registerSection()` 注入 */

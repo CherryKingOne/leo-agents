@@ -594,6 +594,56 @@ definePlugin({
 
 预算参数：`createLeo({ context: { defaultContextWindow, reserveOutputTokens, softLimitRatio, keepRecentTurns } })`。
 
+### 8.5 默认提示词（人设）
+
+`createLeo` 默认加载 `promptsPlugin`，把仓库根目录 `prompts/*.md` 注册成 platform / runtime 层片段：
+
+| 文件 | id | 层 | 内容 |
+|---|---|---|---|
+| `10-identity.md` | `platform.identity` | platform | 人设：身份、性格、诚实原则 |
+| `20-behavior.md` | `platform.behavior` | platform | 工作方式：理解需求、何时澄清、如何汇报 |
+| `30-tool-use.md` | `platform.tool-use` | platform | 工具使用规范（`when: tools`，无工具时不注入） |
+| `40-safety.md` | `platform.safety` | platform | 安全底线（含提示词注入防护） |
+| `50-output.md` | `platform.output` | platform | 输出格式与语言 |
+| `90-runtime.md` | `runtime.environment` | runtime | 当前日期、时区、模型 |
+
+最终 system prompt 顺序：**内置 platform 片段 → 你的 tenant 片段 → `AgentOptions.systemPrompt`（agent 层，写业务角色）→ task → runtime**。
+
+文件格式是 frontmatter + 正文，正文支持 `{{var}}` 与条件块 `{{#var}}…{{/var}}`：
+
+```md
+---
+id: platform.identity     # 与内置同 id 即覆盖
+layer: platform
+priority: 10
+when: tools               # 可选
+---
+你是 {{assistantName}}……
+```
+
+变量优先级：`agent.state` > `prompts.vars` > 内置（`assistantName`=Leo、`organization`、`language`、`date`、`timezone`、`model`、`agentId`、`sessionId`、`tenantId`）。
+
+定制方式（任选）：
+
+```ts
+// 1) 改变量：品牌名、公司、默认语言
+createLeo({ prompts: { vars: { assistantName: '小智', organization: 'Acme', language: '简体中文' }, timezone: 'Asia/Shanghai' } })
+
+// 2) 用自己的目录覆盖/追加（同 id 覆盖，新 id 追加）
+createLeo({ prompts: { dir: './prompts.acme' } })
+
+// 3) 按 id 改正文或禁用
+createLeo({ prompts: { overrides: { 'platform.output': false, 'platform.safety': '……' } } })
+
+// 4) 每个 agent 不同人设：通过 state 覆盖变量
+leo.createAgent({ model, state: { assistantName: '售后小助手' }, systemPrompt: '你负责处理退换货……' })
+
+// 5) 完全不要内置提示词
+createLeo({ prompts: false })
+```
+
+克隆后二次开发可以直接编辑 `prompts/` 下的文件。`resolvePromptTemplates()` / `loadPromptDir()` / `renderTemplate()` 也已导出，可在自定义插件中复用。
+
 ---
 
 ## 9. Agent Loop 详解
@@ -769,6 +819,7 @@ leo-agents 的定位是“底座”：可以作为 npm 依赖使用，也可以*
      index.ts     # 导出
    ```
    然后在 `src/index.ts` 导出，在 `src/leo.ts` 的 `createLeo` 中按需加载。
+   人设与通用规则在 `prompts/*.md`，直接编辑即可（见 8.5）。
 4. 修改后运行 `npm run typecheck && npm test`；新增行为请补测试（见第 13 节）。
 5. 保留 `docs/architecture-plan.md` 中的原则：插件间只通过服务键协作、模型可见即已记录、失败即关闭。
 
