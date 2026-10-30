@@ -8,6 +8,12 @@ import type { ContentBlock, ToolCallBlock } from '../protocol/messages.js'
 /** 能力型权限声明，例如 `{ kind: 'fs.write', paths: ['/workspace/**'] }`、`{ kind: 'net.fetch', hosts: [...] }` */
 export interface Permission {
   kind: string
+  /**
+   * 显式声明这是一个副作用（需要审批）。审批策略默认只把 `fs.write` / `process.exec` 视为副作用；
+   * 插件引入新的副作用类型（如外部 MCP 工具 `mcp.call`）时设为 true，
+   * 即可沿用用户的审批模式（ask / auto / deny、CLI 的 -y），无需用户改配置
+   */
+  sideEffect?: boolean
   [key: string]: unknown
 }
 

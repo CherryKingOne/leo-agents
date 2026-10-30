@@ -108,6 +108,31 @@ describe('createLeoFromConfig', () => {
     await app.dispose()
   })
 
+  it('approval policy honours permissions declared with sideEffect: true', async () => {
+    const { approvalPolicy, createLeo, MockProvider } = await import('../src/index.js')
+    const ran: string[] = []
+    const tool = (name: string, sideEffect?: boolean) => ({
+      name,
+      description: name,
+      parameters: { type: 'object' as const, properties: {} },
+      permissions: [{ kind: 'x.custom', ...(sideEffect === undefined ? {} : { sideEffect }) }],
+      execute: () => { ran.push(name); return 'ok' },
+    })
+    const mock = new MockProvider({ script: [{ toolCalls: [{ id: 'a', name: 'risky', arguments: {} }, { id: 'b', name: 'plain', arguments: {} }] }, { text: 'done' }] })
+    const leo = await createLeo({
+      logLevel: 'silent',
+      providers: [mock],
+      plugins: [
+        { name: 't', inject: ['tools'], apply: async (ctx) => { for (const t of [tool('risky', true), tool('plain')]) await ctx.effect(() => ctx.get('tools').register(t)) } },
+        [approvalPolicy, { mode: 'ask' }],
+      ],
+    })
+    const r = await leo.createAgent({ model: 'm' }).run('go')
+    expect(ran).toEqual(['plain'])
+    expect(r.messages.find((m) => m.role === 'tool' && m.toolName === 'risky')?.isError).toBe(true)
+    await leo.dispose()
+  })
+
   it('auto-detects built-in providers from env and reports missing keys', async () => {
     const root = await mkdtemp(join(tmpdir(), 'leo-empty-'))
     const home = await mkdtemp(join(tmpdir(), 'leo-home-'))

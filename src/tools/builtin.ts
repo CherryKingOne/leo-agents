@@ -290,7 +290,7 @@ export interface ApprovalPolicyOptions {
 }
 
 /**
- * 审批策略插件：声明了副作用权限的工具按 mode 处理；其余放行。
+ * 审批策略插件：声明了副作用权限（kind 属于 sideEffectKinds，或 `sideEffect: true`）的工具按 mode 处理；其余放行。
  * mode=ask 时需要有人提供 `approval` 服务（CLI 交互模式会提供），否则 fail closed。
  */
 export const approvalPolicy = definePlugin<ApprovalPolicyOptions | undefined>({
@@ -299,7 +299,7 @@ export const approvalPolicy = definePlugin<ApprovalPolicyOptions | undefined>({
     const mode = config?.mode ?? 'ask'
     const kinds = new Set(config?.sideEffectKinds ?? ['fs.write', 'process.exec'])
     ctx.on('tools/pre-execute', (p, next) => {
-      const risky = (p.tool.permissions ?? []).some((perm) => kinds.has(perm.kind))
+      const risky = (p.tool.permissions ?? []).some((perm) => perm.sideEffect === true || kinds.has(perm.kind))
       if (!risky || mode === 'auto') return next(p)
       if (mode === 'deny') return { action: 'deny', reason: `Tool "${p.tool.name}" is disabled by approval policy (deny)` }
       if (!ctx.maybe('approval')) {
