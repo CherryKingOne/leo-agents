@@ -2,16 +2,19 @@ import { LeoError, isAbortError } from '../../errors.js'
 import type { AgentMessage, ContentBlock, Usage } from '../../protocol/messages.js'
 import type { FinishReason, LlmProvider, LlmRequest, LlmStreamEvent, ModelInfo, StreamOptions } from '../types.js'
 import { parseSSE } from './sse.js'
+import { resolveSecret } from '../../config/secrets.js'
 
 export interface OpenAICompatibleOptions {
   /** Provider id，用作模型前缀：`deepseek/deepseek-chat` */
   id?: string
   /** 例如 https://api.openai.com/v1、https://api.deepseek.com/v1、vLLM / leo-inference 的 /v1 */
   baseURL: string
-  /** API Key。也可以用 apiKeyEnv 从环境变量读取（推荐，避免明文） */
-  apiKey?: string
+  /** API Key，或每次请求时调用的取值函数（便于密钥轮换）。也可以用 apiKeyEnv 从环境变量读取 */
+  apiKey?: string | (() => string | undefined)
   apiKeyEnv?: string
-  /** 额外请求头（如 OpenRouter 的 HTTP-Referer） */
+  /** 为 true 时缺少密钥直接报 auth 错误（不发请求），默认 false（本地服务常不需要密钥） */
+  requireApiKey?: boolean
+  /** 额外请求头（如 OpenRouter 的 HTTP-Referer）；值支持 `$ENV` / `!command` */
   headers?: Record<string, string>
   /** 模型元信息：上下文窗口与价格，用于预算控制和计费 */
   models?: ModelInfo[]
@@ -46,6 +49,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
 
   async *stream(request: LlmRequest, opts: StreamOptions): AsyncGenerator<LlmStreamEvent> {
     const doFetch = this.opts.fetch ?? fetch
+    const headers = this.headers()
     const controller = new AbortController()
     const onAbort = () => controller.abort(opts.signal.reason)
     if (opts.signal.aborted) throw new LeoError('cancelled', 'Request cancelled before start')
@@ -67,7 +71,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
       try {
         res = await doFetch(`${this.opts.baseURL.replace(/\/+$/, '')}/chat/completions`, {
           method: 'POST',
-          headers: this.headers(),
+          headers,
           body: JSON.stringify(this.buildBody(request)),
           signal: controller.signal,
         })
@@ -118,12 +122,24 @@ export class OpenAICompatibleProvider implements LlmProvider {
   }
 
   private headers(): Record<string, string> {
-    const key = this.opts.apiKey ?? (this.opts.apiKeyEnv ? process.env[this.opts.apiKeyEnv] : undefined)
+    const raw = this.opts.apiKey
+    const key = (typeof raw === 'function' ? raw() : raw) ?? (this.opts.apiKeyEnv ? process.env[this.opts.apiKeyEnv] : undefined)
+    if (!key && this.opts.requireApiKey) {
+      throw new LeoError(
+        'auth',
+        `No API key for provider "${this.id}". Run \`leo auth set ${this.id}\`${this.opts.apiKeyEnv ? ` or set ${this.opts.apiKeyEnv}` : ''}.`,
+      )
+    }
+    const extra: Record<string, string> = {}
+    for (const [k, v] of Object.entries(this.opts.headers ?? {})) {
+      const r = resolveSecret(v)
+      if (r !== undefined) extra[k] = r
+    }
     return {
       'content-type': 'application/json',
       accept: 'text/event-stream',
       ...(key ? { authorization: `Bearer ${key}` } : {}),
-      ...this.opts.headers,
+      ...extra,
     }
   }
 

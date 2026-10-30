@@ -2,25 +2,15 @@ import { contextPlugin } from './context/builder.js'
 import type { TokenBudgetOptions } from './context/types.js'
 import { type Context, Kernel, type PluginRuntime } from './kernel/context.js'
 import { createConsoleLogger, type Logger, type LogLevel } from './kernel/logger.js'
-import { definePlugin, type PluginLike } from './kernel/plugin.js'
+import type { PluginLike } from './kernel/plugin.js'
 import type { Scope } from './kernel/types.js'
 import { llmPlugin } from './llm/service.js'
+import { providerPlugin } from './providers/plugin.js'
 import type { LlmProvider } from './llm/types.js'
 import { agentLoopPlugin } from './loop/service.js'
 import type { Agent, AgentOptions } from './loop/types.js'
 import { sessionPlugin } from './session/store.js'
 import { toolsPlugin, type ToolRegistryOptions } from './tools/registry.js'
-
-/** 把一个 LlmProvider 包装成插件（便于在插件包中分发 provider） */
-export function providerPlugin(provider: LlmProvider, opts: { default?: boolean } = {}) {
-  return definePlugin({
-    name: `leo:provider:${provider.id}`,
-    inject: ['llm'],
-    apply(ctx) {
-      void ctx.effect(() => ctx.get('llm').registerProvider(provider, opts))
-    },
-  })
-}
 
 export interface CreateLeoOptions {
   logger?: Logger
@@ -32,7 +22,10 @@ export interface CreateLeoOptions {
   sessions?: { dir?: string }
   tools?: ToolRegistryOptions
   context?: TokenBudgetOptions
-  /** 要注册的模型提供方，第一个为默认 */
+  /**
+   * 要注册的模型提供方实例，第一个为默认（等价于 `plugins: [providerPlugin(p)]`）。
+   * 推荐直接用提供方插件：`plugins: [deepseek(), openaiCompatible({...})]`
+   */
   providers?: LlmProvider[]
   /** 额外插件，按顺序加载；可以用 [plugin, config] 传配置 */
   plugins?: (PluginLike | [PluginLike, unknown])[]
@@ -57,10 +50,7 @@ export interface Leo {
  * 创建一个 leo 实例：内核 + 核心插件（sessions / llm / tools / context / agentLoop）+ 你的插件。
  *
  * ```ts
- * const leo = await createLeo({
- *   providers: [new OpenAICompatibleProvider({ id: 'deepseek', baseURL: 'https://api.deepseek.com/v1', apiKeyEnv: 'DEEPSEEK_API_KEY' })],
- *   plugins: [weatherPlugin],
- * })
+ * const leo = await createLeo({ plugins: [deepseek(), weatherPlugin] })   // deepseek() 读取 DEEPSEEK_API_KEY
  * const agent = leo.createAgent({ model: 'deepseek/deepseek-chat', systemPrompt: '你是一个助手' })
  * for await (const ev of agent.prompt('北京天气如何？')) { ... }
  * ```
