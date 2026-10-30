@@ -17,6 +17,7 @@
   },
   "files": [
     "dist",
+    "python/leo_api/*.py",
     "docs",
     "README.md"
   ],
