@@ -3,7 +3,7 @@ import { createServer } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { ApiBridge, type BridgeHost, type BridgeMessage } from '../src/api/bridge.js'
-import { attachBridge, findPython, PYTHON_DIR } from '../src/api/server.js'
+import { attachBridge, resolvePythonLauncher } from '../src/api/server.js'
 import { definePlugin } from '../src/index.js'
 import { setup } from './helpers.js'
 
@@ -77,7 +77,7 @@ describe('ApiBridge', () => {
   })
 })
 
-const python = findPython()
+const launcher = resolvePythonLauncher({ venvDir: `${process.env.TMPDIR ?? '/tmp'}/leo-api-test-venv` })
 
 async function freePort(): Promise<number> {
   return new Promise((resolve) => {
@@ -89,7 +89,7 @@ async function freePort(): Promise<number> {
 }
 
 async function waitHealthy(base: string) {
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < 1200; i++) {
     try {
       if ((await fetch(`${base}/health`)).ok) return
     } catch {}
@@ -98,14 +98,14 @@ async function waitHealthy(base: string) {
   throw new Error('python server did not start')
 }
 
-describe.skipIf(!python)('Python HTTP 服务（端到端）', () => {
+describe.skipIf(!launcher)('Python HTTP 服务（端到端）', () => {
   it('chat / SSE / OpenAI 兼容 / 工具 / 令牌', async () => {
     const h = await host([{ text: '你好' }, { text: '流式回复' }, { text: 'openai 回复' }, { text: '流' }])
     disposers.push(h.dispose)
     const bridge = new ApiBridge(h)
     const port = await freePort()
-    const child = spawn(python!, ['-m', 'leo_api', '--host', '127.0.0.1', '--port', String(port)], {
-      env: { ...process.env, PYTHONPATH: PYTHON_DIR, PYTHONUNBUFFERED: '1', LEO_API_TOKEN: 't0k' },
+    const child = spawn(launcher!.command, [...launcher!.args, '--host', '127.0.0.1', '--port', String(port)], {
+      env: { ...process.env, ...launcher!.env, LEO_API_TOKEN: 't0k' },
       stdio: ['pipe', 'pipe', 'ignore'],
     })
     const exited = attachBridge(bridge, child)
@@ -149,5 +149,5 @@ describe.skipIf(!python)('Python HTTP 服务（端到端）', () => {
     expect(nf.status).toBe(404)
     const sessions = (await (await fetch(`${base}/v1/sessions`, { headers: auth })).json()) as { sessions: { sessionId: string }[] }
     expect(sessions.sessions.map((s) => s.sessionId)).toContain(body.sessionId)
-  }, 20_000)
+  }, 120_000)
 })

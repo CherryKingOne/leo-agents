@@ -5,3 +5,4 @@ coverage
 .env
 __pycache__/
 *.pyc
+.venv/

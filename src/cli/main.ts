@@ -324,7 +324,7 @@ async function cmdApi(cwd: string, args: CliArgs): Promise<number> {
         providers: app.providers.map((p) => ({ id: p.id, name: p.name, loaded: p.loaded, defaultModel: p.defaultModel ?? null, reason: p.reason ?? null })),
         info: { version: version(), cwd, projectRoot: paths.projectRoot ?? null, approval },
       },
-      { host, port, ...(token ? { token } : {}), ...(args.python ? { python: args.python } : {}), log },
+      { host, port, ...(token ? { token } : {}), ...(args.python ? { python: args.python } : {}), venvDir: join(paths.userDir, 'api', '.venv'), log },
     )
   } finally {
     await app.dispose()

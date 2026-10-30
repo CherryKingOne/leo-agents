@@ -15,21 +15,62 @@ export interface ApiServerOptions {
   port: number
   /** 访问令牌；设置后请求需带 Authorization: Bearer <token> */
   token?: string
-  /** Python 可执行文件，默认依次尝试 LEO_PYTHON、python3、python */
+  /** Python 解释器或版本：用 uv 时作为 uv --python 的值，否则作为可执行文件 */
   python?: string
+  /** uv 管理的虚拟环境目录（UV_PROJECT_ENVIRONMENT），默认 ~/.leo/api/.venv */
+  venvDir?: string
   log: (s: string) => void
+}
+
+export interface PythonLauncher {
+  via: 'uv' | 'python'
+  command: string
+  /** 放在 leo_api 参数之前的参数 */
+  args: string[]
+  env: Record<string, string>
 }
 
 /** 包内 Python 代码所在目录（dist/api → ../../python） */
 export const PYTHON_DIR = fileURLToPath(new URL('../../python', import.meta.url))
 
+/** 要求的 Python 版本（与 python/pyproject.toml、.python-version 一致） */
+export const PYTHON_VERSION = '3.12'
+
+export function findUv(): string | undefined {
+  for (const bin of [process.env.LEO_UV, 'uv'].filter((x): x is string => !!x)) {
+    if (spawnSync(bin, ['--version'], { stdio: 'ignore' }).status === 0) return bin
+  }
+  return undefined
+}
+
+/** 不用 uv 时的后备：找一个 Python 3.12 解释器 */
 export function findPython(explicit?: string): string | undefined {
-  const candidates = [explicit, process.env.LEO_PYTHON, 'python3', 'python'].filter((x): x is string => !!x)
+  const candidates = [explicit, process.env.LEO_PYTHON, `python${PYTHON_VERSION}`, 'python3', 'python'].filter((x): x is string => !!x)
   for (const bin of candidates) {
-    const r = spawnSync(bin, ['-c', 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)'], { stdio: 'ignore' })
+    const r = spawnSync(bin, ['-c', 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 12) else 1)'], { stdio: 'ignore' })
     if (r.status === 0) return bin
   }
   return undefined
+}
+
+/**
+ * 决定如何启动 Python 服务：优先 uv（uv run --project python/，按 pyproject 锁定 Python 3.12，
+ * 虚拟环境放在 venvDir，缺 3.12 时由 uv 自动下载）；没有 uv 时退回本机的 Python 3.12。
+ */
+export function resolvePythonLauncher(opts: { python?: string; venvDir?: string } = {}): PythonLauncher | undefined {
+  const pythonPath = [PYTHON_DIR, process.env.PYTHONPATH].filter(Boolean).join(process.platform === 'win32' ? ';' : ':')
+  const base = { PYTHONPATH: pythonPath, PYTHONUNBUFFERED: '1' }
+  const uv = findUv()
+  if (uv) {
+    return {
+      via: 'uv',
+      command: uv,
+      args: ['run', '--project', PYTHON_DIR, '--frozen', '--quiet', '--python', opts.python ?? PYTHON_VERSION, 'python', '-m', 'leo_api'],
+      env: { ...base, ...(opts.venvDir ? { UV_PROJECT_ENVIRONMENT: opts.venvDir } : {}) },
+    }
+  }
+  const python = findPython(opts.python)
+  return python ? { via: 'python', command: python, args: ['-m', 'leo_api'], env: base } : undefined
 }
 
 /** 把桥接到一个子进程的 stdio 上；返回子进程退出的 Promise */
@@ -53,23 +94,19 @@ export function attachBridge(bridge: ApiBridge, child: ChildProcess): Promise<nu
 }
 
 export async function runApiServer(host: BridgeHost, opts: ApiServerOptions): Promise<number> {
-  const python = findPython(opts.python)
-  if (!python) {
-    opts.log('✗ 没找到 Python 3.9+：安装 Python，或用 --python / LEO_PYTHON 指定解释器')
-    return 1
-  }
   if (!existsSync(PYTHON_DIR)) {
     opts.log(`✗ 缺少 Python 服务代码：${PYTHON_DIR}`)
     return 1
   }
-  const bridge = new ApiBridge(host)
-  const env = {
-    ...process.env,
-    PYTHONPATH: [PYTHON_DIR, process.env.PYTHONPATH].filter(Boolean).join(process.platform === 'win32' ? ';' : ':'),
-    PYTHONUNBUFFERED: '1',
-    ...(opts.token ? { LEO_API_TOKEN: opts.token } : {}),
+  const launcher = resolvePythonLauncher({ ...(opts.python ? { python: opts.python } : {}), ...(opts.venvDir ? { venvDir: opts.venvDir } : {}) })
+  if (!launcher) {
+    opts.log(`✗ 没找到 uv：leo api 用 uv 管理 Python ${PYTHON_VERSION} 环境。安装：curl -LsSf https://astral.sh/uv/install.sh | sh（或 brew install uv）`)
+    return 1
   }
-  const child = spawn(python, ['-m', 'leo_api', '--host', opts.host, '--port', String(opts.port)], {
+  if (launcher.via === 'python') opts.log(`⚠ 没找到 uv，直接使用本机 ${launcher.command}（建议安装 uv 管理 Python ${PYTHON_VERSION} 环境）`)
+  const bridge = new ApiBridge(host)
+  const env = { ...process.env, ...launcher.env, ...(opts.token ? { LEO_API_TOKEN: opts.token } : {}) }
+  const child = spawn(launcher.command, [...launcher.args, '--host', opts.host, '--port', String(opts.port)], {
     env,
     stdio: ['pipe', 'pipe', 'inherit'],
   })

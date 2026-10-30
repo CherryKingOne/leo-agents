@@ -3,17 +3,26 @@
 `leo` 默认进入对话；`leo api` 则不进入对话，而是起一个常驻 HTTP 服务：
 
 - Node 进程持有常驻的 leo 实例：配置、密钥、插件与 `leo` 完全一致，**插件一直在线**（例如 chat-channels 的 QQ / 飞书长连接）；
-- 对外的 HTTP 服务由 Python 编写（`python/leo_api`，只用标准库，无需 pip 安装），作为子进程启动；
+- 对外的 HTTP 服务由 Python 3.12 编写（`python/leo_api`，只用标准库），用 **uv** 管理环境，作为子进程启动；
 - 两者通过子进程的 stdin/stdout 交换 JSON Lines（协议见 `src/api/bridge.ts`），不占额外端口。
 
 ```bash
 leo api                                   # 默认 http://127.0.0.1:8765
 leo api --port 9000 -y                    # -y：自动批准写文件/执行命令（API 模式没人审批，默认会拒绝）
 leo api --host 0.0.0.0 --token s3cret     # 对外监听时务必设置令牌
-leo api --python /usr/local/bin/python3   # 指定解释器（也可 LEO_PYTHON），需要 Python 3.9+
+leo api --python 3.12                     # 传给 uv run --python（默认 3.12）
 ```
 
-环境变量：`LEO_API_HOST`、`LEO_API_PORT`、`LEO_API_TOKEN`、`LEO_PYTHON`。Ctrl+C 停止（Python 与 leo 一起退出）。
+## Python 环境（uv）
+
+- 需要先安装 [uv](https://docs.astral.sh/uv/)：`curl -LsSf https://astral.sh/uv/install.sh | sh` 或 `brew install uv`；
+- `python/pyproject.toml` 与 `.python-version` 锁定 Python 3.12（`uv.lock` 无第三方依赖）；
+- `leo api` 实际执行 `uv run --project python/ --frozen --python 3.12 python -m leo_api`，虚拟环境放在 `~/.leo/api/.venv`（不写进安装目录），本机没有 3.12 时 uv 会自动下载；
+- 自定义 uv 路径用 `LEO_UV`；没装 uv 时会退回本机的 Python 3.12（`python3.12` / `LEO_PYTHON`）并给出提示。
+
+单独开发 Python 部分：`cd python && uv sync && uv run python -m leo_api --help`。
+
+环境变量：`LEO_API_HOST`、`LEO_API_PORT`、`LEO_API_TOKEN`、`LEO_UV`、`LEO_PYTHON`。Ctrl+C 停止（Python 与 leo 一起退出）。
 
 ## 接口
 

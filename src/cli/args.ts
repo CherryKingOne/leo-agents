@@ -106,7 +106,7 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
       --registry <url|path>   插件仓库地址（默认官方仓库，也可用 LEO_PLUGIN_REGISTRY）
       --host / --port         leo api 监听地址（默认 127.0.0.1:8765，也可用 LEO_API_HOST / LEO_API_PORT）
       --token <t>             leo api 访问令牌（也可用 LEO_API_TOKEN）；监听非本机地址时建议设置
-      --python <bin>          leo api 使用的 Python 解释器（默认 LEO_PYTHON、python3、python）
+      --python <ver|bin>      leo api 的 Python（默认由 uv 管理 3.12；也可 LEO_UV 指定 uv）
   -h, --help / -v, --version
 
 内置提供方：deepseek, openai, qwen, moonshot, zhipu, siliconflow, openrouter, ollama

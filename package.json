@@ -18,6 +18,9 @@
   "files": [
     "dist",
     "python/leo_api/*.py",
+    "python/pyproject.toml",
+    "python/uv.lock",
+    "python/.python-version",
     "docs",
     "README.md"
   ],
