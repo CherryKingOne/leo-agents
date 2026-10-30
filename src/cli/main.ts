@@ -16,6 +16,7 @@ import { textOf } from '../protocol/messages.js'
 import { PROVIDER_PRESETS } from '../providers/catalog.js'
 import type { ApprovalService } from '../tools/types.js'
 import { type CliArgs, HELP, parseArgs } from './args.js'
+import { addPlugin, DEFAULT_PLUGIN_REGISTRY, defaultIo, loadRegistry, removePlugin } from './plugin.js'
 import { askSecret, c, makeRl, oneLine, readStdin } from './ui.js'
 
 const out = process.stdout
@@ -52,6 +53,9 @@ async function main(argv: string[]): Promise<number> {
       return cmdModels(cwd, args)
     case 'doctor':
       return cmdDoctor(cwd, args)
+    case 'plugin':
+    case 'plugins':
+      return cmdPlugin(cwd, args)
     default:
       return cmdRun(cwd, args)
   }
@@ -126,6 +130,52 @@ async function cmdInit(cwd: string): Promise<number> {
   }
   log(`\n下一步：运行 ${c.bold('leo')} 开始对话，或 ${c.bold('leo doctor')} 检查配置`)
   return 0
+}
+
+// —— leo plugin ——————————————————————————————————————————————————————————
+async function cmdPlugin(cwd: string, args: CliArgs): Promise<number> {
+  const [sub = 'list', name] = args.positionals
+  const resolved = await loadConfig({ cwd })
+  const registry = args.registry ?? process.env.LEO_PLUGIN_REGISTRY ?? DEFAULT_PLUGIN_REGISTRY
+  const io = defaultIo(log)
+  const { paths } = resolved
+  const projectRoot = args.global ? undefined : (paths.projectRoot ?? cwd)
+  const scopeDir = args.global ? paths.userDir : (paths.projectDir ?? join(cwd, '.leo'))
+  try {
+    if (sub === 'add' || sub === 'install' || sub === 'i') {
+      if (!name) return void log(c.red('用法：leo plugin add <id> [-g] [--npm]')), 2
+      await addPlugin({ name, scopeDir, ...(projectRoot ? { projectRoot } : {}), npm: args.npm, registry, leoVersion: version() }, io)
+      return 0
+    }
+    if (sub === 'remove' || sub === 'rm' || sub === 'uninstall') {
+      if (!name) return void log(c.red('用法：leo plugin remove <id> [-g]')), 2
+      return (await removePlugin({ name, scopeDir, registry }, io)) ? 0 : 1
+    }
+    if (sub === 'list' || sub === 'ls') {
+      log(c.bold('已安装'))
+      if (!resolved.plugins.length) log(c.gray('  （无）'))
+      for (const p of resolved.plugins) log(`  ${p.spec} ${c.gray(`(${p.from})`)}`)
+      try {
+        const reg = await loadRegistry(registry, io)
+        log(`\n${c.bold('插件仓库')} ${c.gray(registry)}`)
+        const installed = resolved.plugins.map((p) => p.spec)
+        for (const e of reg.plugins) {
+          const mark = installed.some((s) => s === e.package || s.endsWith(`/${e.id}.bundle.js`)) ? c.green(' 已安装') : ''
+          const status = e.status === 'stable' ? '' : c.yellow(` [${e.status}]`)
+          log(`  ${c.bold(e.id)} ${e.version}${status}${mark}  ${c.gray(e.description)}`)
+        }
+      } catch (e) {
+        log(c.yellow(`\n${(e as Error).message}`))
+      }
+      return 0
+    }
+    log(c.red(`未知子命令：${sub}`))
+    log('用法：leo plugin list | add <id> | remove <id>')
+    return 2
+  } catch (e) {
+    log(c.red(`✗ ${(e as Error).message}`))
+    return 1
+  }
 }
 
 // —— leo auth ——————————————————————————————————————————————————————————
@@ -241,7 +291,7 @@ async function latestSession(dir: string): Promise<string | undefined> {
   }
 }
 
-function makeApproval(rl: Interface | undefined): ApprovalService | undefined {
+function makeApproval(rl: Interface | undefined, labelOf: (agentId: string) => string | undefined): ApprovalService | undefined {
   if (!rl) return undefined
   const always = new Set<string>()
   return {
@@ -249,7 +299,8 @@ function makeApproval(rl: Interface | undefined): ApprovalService | undefined {
       if (always.has(req.tool.name)) return { approved: true }
       const args = req.args as Record<string, unknown>
       const preview = typeof args.command === 'string' ? args.command : typeof args.path === 'string' ? args.path : JSON.stringify(args)
-      log(`\n${c.yellow('?')} ${c.bold(req.tool.name)} ${oneLine(String(preview), 300)}`)
+      const label = labelOf(req.agentId)
+      log(`\n${c.yellow('?')} ${label ? c.magenta(`[${label}] `) : ''}${c.bold(req.tool.name)} ${oneLine(String(preview), 300)}`)
       const a = (await rl.question(`  允许执行？${c.gray('[y]是 / [n]否 / [a]本次会话都允许')} `)).trim().toLowerCase()
       if (a === 'a' || a === 'always') {
         always.add(req.tool.name)
@@ -287,6 +338,15 @@ function render(ev: AgentEvent, args: CliArgs, state: { midLine: boolean; reason
       const a = ev.call.arguments as Record<string, unknown> | undefined
       const preview = a ? (typeof a.command === 'string' ? a.command : typeof a.path === 'string' ? a.path : typeof a.url === 'string' ? a.url : typeof a.pattern === 'string' ? a.pattern : JSON.stringify(a)) : ''
       log(c.cyan(`⚙ ${ev.call.name} ${oneLine(String(preview))}`))
+      break
+    }
+    case 'tool_update': {
+      // 只显示约定的进度格式 { type: 'progress', message }（见 ToolProgress）
+      const p = ev.partial as { type?: unknown; message?: unknown } | null
+      if (p && typeof p === 'object' && p.type === 'progress' && typeof p.message === 'string') {
+        ensureNewline()
+        log(c.gray(`  … ${oneLine(p.message, 200)}`))
+      }
       break
     }
     case 'tool_result': {
@@ -352,6 +412,8 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
   }
 
   let app: LeoApp
+  let ready: LeoApp | undefined
+  const labelOf = (agentId: string) => ready?.leo.ctx.get('agentLoop').get(agentId)?.options.label
   try {
     app = await createLeoFromConfig({
       cwd,
@@ -360,7 +422,7 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
         ...(args.yes || args.noTools ? { tools: { ...(args.yes ? { approval: 'auto' as const } : {}), ...(args.noTools ? { builtin: false as const } : {}) } } : {}),
       },
       ...(credentialOverrides ? { credentialOverrides } : {}),
-      ...(rl ? { approval: makeApproval(rl)! } : {}),
+      ...(rl ? { approval: makeApproval(rl, labelOf)! } : {}),
     })
   } catch (e) {
     rl?.close()
@@ -368,6 +430,7 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
     return 1
   }
 
+  ready = app
   if (!app.model) {
     log(c.yellow('还没有可用的模型。三选一：'))
     log(`  1) ${c.bold('leo auth set deepseek')}            保存密钥（其他：openai / qwen / moonshot / zhipu / siliconflow / openrouter）`)

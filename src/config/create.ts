@@ -9,8 +9,8 @@
  * ```
  * CLI（`leo`）就是基于它实现的。
  */
-import { isAbsolute, join, resolve } from 'node:path'
-import { createRequire } from 'node:module'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { LeoError } from '../errors.js'
 import type { PluginLike } from '../kernel/plugin.js'
@@ -22,9 +22,16 @@ import { PROVIDER_PRESETS } from '../providers/catalog.js'
 import { providerKindsPlugin } from '../providers/kinds.js'
 import { approvalPolicy, builtinToolsPlugin } from '../tools/builtin.js'
 import type { ApprovalService } from '../tools/types.js'
-import { type LoadConfigOptions, loadConfig, type PluginRef, type ResolvedConfig } from './load.js'
+import { type LeoPaths, type LoadConfigOptions, loadConfig, type PluginRef, type ResolvedConfig } from './load.js'
 import { type CredentialMap, type CredentialService, DefaultCredentialService } from './secrets.js'
 import { type ProviderConfig, ProviderConfigSchema } from './types.js'
+
+declare module '../kernel/types.js' {
+  interface Services {
+    /** 由 createLeoFromConfig 提供：当前目录、项目根、项目 .leo 目录、用户 ~/.leo 目录。插件用 ctx.maybe('leoPaths') 读取 */
+    leoPaths: Readonly<LeoPaths>
+  }
+}
 
 export const DEFAULT_SYSTEM_PROMPT = `You are Leo, a capable general-purpose AI agent. You complete tasks by reasoning step by step and using the tools available to you (files, shell, web) instead of guessing.
 - Reply in the user's language. Be concise; lead with the result.
@@ -66,22 +73,83 @@ export interface LeoApp {
   dispose(): Promise<void>
 }
 
-/** 加载配置里的插件模块：default 导出插件，或 `{ default, config }` */
-export async function importPlugin(ref: PluginRef, baseDir: string): Promise<PluginLike> {
+/** 包的入口：优先 exports["."] 的 import / default 条件，其次 module / main */
+function packageEntry(pkgDir: string, subpath: string): string | undefined {
+  let pkg: Record<string, unknown>
+  try {
+    pkg = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+  const pick = (target: unknown): string | undefined => {
+    if (typeof target === 'string') return target
+    if (Array.isArray(target)) return target.map(pick).find(Boolean)
+    if (target && typeof target === 'object') {
+      const t = target as Record<string, unknown>
+      return pick(t.import) ?? pick(t.node) ?? pick(t.default)
+    }
+    return undefined
+  }
+  const exp = pkg.exports
+  if (exp !== undefined) {
+    const key = subpath ? `./${subpath}` : '.'
+    const isMap = exp && typeof exp === 'object' && !Array.isArray(exp) && Object.keys(exp).some((k) => k.startsWith('.'))
+    const target = isMap ? (exp as Record<string, unknown>)[key] : key === '.' ? exp : undefined
+    const rel = pick(target)
+    return rel ? join(pkgDir, rel) : undefined
+  }
+  if (subpath) return join(pkgDir, subpath)
+  const main = (typeof pkg.module === 'string' && pkg.module) || (typeof pkg.main === 'string' && pkg.main) || 'index.js'
+  return join(pkgDir, main)
+}
+
+/**
+ * 在 dirs 中按顺序解析 npm 包（每个目录向上查找 node_modules），支持纯 ESM 包。
+ * 找不到返回 undefined
+ */
+export function resolvePluginPackage(spec: string, dirs: string[]): string | undefined {
+  const parts = spec.split('/')
+  const nameLen = spec.startsWith('@') ? 2 : 1
+  const name = parts.slice(0, nameLen).join('/')
+  const subpath = parts.slice(nameLen).join('/')
+  for (const start of dirs) {
+    let dir = resolve(start)
+    while (true) {
+      const pkgDir = join(dir, 'node_modules', name)
+      if (existsSync(join(pkgDir, 'package.json'))) {
+        const entry = packageEntry(pkgDir, subpath)
+        if (entry) return entry
+      }
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+  }
+  return undefined
+}
+
+/**
+ * 加载配置里的插件模块：default 导出插件，或 `{ default, config }`。
+ * npm 包依次在 searchDirs 中解析（createLeoFromConfig 传入：项目 .leo、项目根、用户 ~/.leo），
+ * 所以 `leo plugin add --npm` 装到 .leo/node_modules 或 ~/.leo/node_modules 的包都能找到
+ */
+export async function importPlugin(ref: PluginRef, searchDirs: string | string[]): Promise<PluginLike> {
+  const dirs = Array.isArray(searchDirs) ? searchDirs : [searchDirs]
   let url: string
   if (isAbsolute(ref.spec)) url = pathToFileURL(ref.spec).href
   else {
-    try {
-      url = pathToFileURL(createRequire(join(baseDir, 'package.json')).resolve(ref.spec)).href
-    } catch {
-      url = ref.spec // 交给 ESM 解析（ESM-only 包）
-    }
+    const entry = resolvePluginPackage(ref.spec, dirs)
+    url = entry ? pathToFileURL(entry).href : ref.spec // 交给 ESM 解析
   }
   let mod: Record<string, unknown>
   try {
     mod = (await import(url)) as Record<string, unknown>
   } catch (err) {
-    const hint = ref.spec.endsWith('.ts') ? '（.ts 插件需要 Node ≥ 22.18 或使用 --experimental-strip-types）' : ''
+    const hint = ref.spec.endsWith('.ts')
+      ? '（.ts 插件需要 Node ≥ 22.18 或使用 --experimental-strip-types）'
+      : !isAbsolute(ref.spec)
+        ? `（在这些目录中都没找到：${dirs.join(', ')}；可用 leo plugin add 安装）`
+        : ''
     throw new LeoError('plugin_unresolved', `Failed to load plugin ${ref.spec} (from ${ref.from})${hint}: ${(err as Error).message}`, {
       cause: err,
     })
@@ -171,7 +239,12 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
   })
 
   const userPlugins: [PluginLike, unknown][] = []
-  for (const ref of resolved.plugins) userPlugins.push([await importPlugin(ref, base), ref.config])
+  const searchDirs = [...new Set([...(paths.projectDir ? [paths.projectDir] : []), base, paths.userDir])]
+  for (const ref of resolved.plugins) {
+    // 用户级配置里的包优先从 ~/.leo 解析
+    const dirs = ref.from.startsWith(paths.userDir) ? [paths.userDir, ...searchDirs.filter((d) => d !== paths.userDir)] : searchDirs
+    userPlugins.push([await importPlugin(ref, dirs), ref.config])
+  }
 
   const sessionsDir = config.sessions.persist
     ? config.sessions.dir
@@ -180,6 +253,7 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
     : undefined
   const tools = config.tools
   const plugins: (PluginLike | [PluginLike, unknown])[] = [
+    definePlugin({ name: 'leo:paths', apply: (ctx) => void ctx.provide('leoPaths', Object.freeze({ ...paths })) }),
     definePlugin({ name: 'leo:credentials', apply: (ctx) => void ctx.provide('credentials', credentials) }),
     providerKindsPlugin,
     ...userPlugins,

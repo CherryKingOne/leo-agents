@@ -37,6 +37,14 @@ declare module '../kernel/types.js' {
   }
 }
 
+/** 工具是否落在筛选范围内（names 与 tags 同时给出时需同时满足） */
+export function matchesFilter(tool: ToolDefinition, filter: ToolFilter | false): boolean {
+  if (filter === false) return false
+  if (filter.names && !filter.names.includes(tool.name)) return false
+  if (filter.tags?.length && !tool.tags?.some((tag) => filter.tags!.includes(tag))) return false
+  return true
+}
+
 const OUTPUT_BRAND = Symbol.for('leo.toolOutput')
 
 /** 构造结构化工具返回（可设置 isError / terminate / details） */
@@ -102,13 +110,8 @@ export class DefaultToolRegistry implements ToolRegistry {
   }
 
   list(filter?: ToolFilter): ToolDefinition[] {
-    let list = [...this.tools.values()]
-    if (filter?.names) {
-      const set = new Set(filter.names)
-      list = list.filter((t) => set.has(t.name))
-    }
-    if (filter?.tags?.length) list = list.filter((t) => t.tags?.some((tag) => filter.tags!.includes(tag)))
-    return list
+    const list = [...this.tools.values()]
+    return filter ? list.filter((t) => matchesFilter(t, filter)) : list
   }
 
   schemas(filter?: ToolFilter): ToolSchema[] {
@@ -153,6 +156,9 @@ export class DefaultToolRegistry implements ToolRegistry {
 
   private async prepare(call: ToolCallBlock, batch: BatchContext): Promise<Prepared | ToolResult> {
     const tool = this.tools.get(call.name)
+    if (tool && batch.filter !== undefined && !matchesFilter(tool, batch.filter)) {
+      return errorResult(call, 'tool_not_found', `Tool "${call.name}" is not available to this agent`, 0)
+    }
     if (!tool) {
       const available = [...this.tools.keys()].join(', ')
       return errorResult(call, 'tool_not_found', `Unknown tool "${call.name}". Available tools: ${available || '(none)'}`, 0)
