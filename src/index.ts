@@ -7,7 +7,6 @@
  * - session  只追加会话日志
  * - tools    工具注册表与受控执行管线
  * - context  上下文构建、token 预算、压缩
- * - prompts  默认提示词（prompts/*.md）与模板渲染
  * - loop     通用 Agent Loop
  */
 export * from './errors.js'
@@ -17,7 +16,6 @@ export * from './llm/index.js'
 export * from './session/index.js'
 export * from './tools/index.js'
 export * from './context/index.js'
-export * from './prompts/index.js'
 export * from './loop/index.js'
 export * from './leo.js'
 export { z } from 'zod'
