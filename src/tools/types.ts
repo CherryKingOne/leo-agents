@@ -120,9 +120,24 @@ export interface BatchContext {
   ctx: Context<any>
   /** 强制整批串行 */
   sequential?: boolean
+  /**
+   * 该 Agent 可用的工具（与 AgentOptions.tools 相同）。提供时，筛选之外的工具一律拒绝，
+   * 即使模型“猜”出了未暴露给它的工具名。false 表示禁用全部工具
+   */
+  filter?: ToolFilter | false
   onUpdate?(callId: string, partial: unknown): void
   /** 某个工具开始执行时回调（预检通过后） */
   onStart?(call: ToolCallBlock): void
+}
+
+/**
+ * 工具进度的约定格式（经 `exec.onUpdate()` 上报，Agent 以 tool_update 事件转发）。
+ * 界面只认 `type: 'progress'` 并显示 `message`；其余字段由工具自定，供程序化消费
+ */
+export interface ToolProgress {
+  type: 'progress'
+  message: string
+  [key: string]: unknown
 }
 
 export interface ToolFilter {

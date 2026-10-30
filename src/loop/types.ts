@@ -46,6 +46,8 @@ export interface AgentOptions {
   tenant?: TenantContext
   /** 任意 agent 状态，供 prompt 片段、插件使用 */
   state?: Record<string, unknown>
+  /** 给人看的名字（如子 Agent 的 "sub-agent:explorer"），界面在审批、进度中用它区分来源 */
+  label?: string
   limits?: Partial<RunLimits>
   retry?: Partial<RetryPolicy>
 }

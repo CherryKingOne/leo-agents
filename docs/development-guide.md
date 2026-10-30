@@ -366,7 +366,29 @@ console.log(leo.describe())
 ```
 
 使用方：`import weather from '@acme/leo-plugin-weather'`，然后放进 `plugins`。
-（`leo install` 命令、manifest 中的权限声明、签名校验属于规划中的 M2/M4，见架构文档。）
+
+### 4.7 用 `leo plugin` 安装插件
+
+```bash
+leo plugin list                     # 已安装的插件 + 官方插件仓库
+leo plugin add sub-agents           # 下载单文件到 .leo/plugins/sub-agents.bundle.js（校验 sha256），自动加载
+leo plugin add sub-agents -g        # 装到 ~/.leo/plugins/，所有项目可用
+leo plugin add sub-agents --npm     # npm install --prefix .leo，并把包名写进 .leo/config.json 的 plugins
+leo plugin add @acme/x --npm        # 仓库外的任意 npm 包
+leo plugin remove sub-agents [-g]   # 删除单文件 / 从配置移除并 npm uninstall
+```
+
+- 插件仓库默认是官方仓库 `https://raw.githubusercontent.com/CherryKingOne/leo-plugin/main/registry.json`，
+  可用 `--registry <url|路径>` 或环境变量 `LEO_PLUGIN_REGISTRY` 指向镜像或私有仓库。
+- 仓库条目格式见 leo-plugin 仓库的 `schemas/registry.schema.json`；`bundle.url` 可写相对地址（相对仓库文件）。
+- npm 包按顺序在 **项目 `.leo/` → 项目根 → `~/.leo/`** 的 `node_modules` 中解析（用户级配置里的包先查 `~/.leo/`），
+  支持只有 `import` 条件的纯 ESM 包。
+- 写配置时只改 `plugins` 数组，保留文件里的注释与格式。
+
+### 4.8 宿主信息 `leoPaths`
+
+通过 `createLeoFromConfig`（含 CLI）启动时，最先提供 `leoPaths` 服务：`{ cwd, projectRoot?, projectDir?, userDir, ... }`。
+插件用 `ctx.maybe('leoPaths')` 读取（用 `createLeo` 手动组装时没有这个服务，插件应能在缺失时正常工作）。
 
 ---
 
@@ -425,6 +447,7 @@ const consumer = definePlugin({
 | `context` | `ContextService` | 分层 prompt + token 预算 + 压缩 |
 | `agentLoop` | `AgentLoopService` | `DefaultAgent` |
 | `approval`（可选） | `ApprovalService` | 无（未提供时 `ask` 决策一律拒绝） |
+| `leoPaths`（可选） | `LeoPaths` | `createLeoFromConfig` 提供：当前目录、项目根、`.leo`、`~/.leo` |
 
 ---
 
@@ -533,6 +556,13 @@ leo.createAgent({ model, tools: { names: ['fs_read'] } })
 leo.createAgent({ model, tools: false })                 // 不使用工具
 leo.createAgent({ model, sequentialTools: true })        // 强制串行
 ```
+
+筛选不仅决定发给模型的 schema，也在执行时强制生效：模型调用筛选之外的工具（哪怕“猜”中了名字）会得到
+`tool_not_found` 错误结果，工具不会执行，也不会弹出审批。
+
+工具通过 `exec.onUpdate(partial)` 上报进度（Agent 转为 `tool_update` 事件）。约定格式
+`{ type: 'progress', message: string, ... }`（`ToolProgress`）：CLI 会显示 `message`，其他字段供程序化消费；
+其他格式（如 bash 的原始输出片段）CLI 不显示。
 
 ### 7.4 执行管线
 
@@ -799,6 +829,7 @@ prompt(input)
 | `maxOutputTokens` / `temperature` / `topP` / `stop` / `providerOptions` | 模型参数 |
 | `tenant` | 租户上下文，贯穿工具、计量、prompt 片段 |
 | `state` | 任意状态，供 prompt 片段和插件读取 |
+| `label` | 给人看的名字（如 `sub-agent:explorer`）。CLI 审批提示会显示它，用来区分是哪个 Agent 发起的 |
 | `limits` | `{ maxSteps=50, maxTurnTokens, maxTurnCostUsd, turnTimeoutMs }` |
 | `retry` | `{ maxAttempts=4, baseDelayMs=1000, maxDelayMs=30000 }` |
 

@@ -246,6 +246,7 @@ export class DefaultAgent implements Agent {
             signal,
             ctx: this.ctx,
             ...(this.options.sequentialTools ? { sequential: true } : {}),
+            ...(this.options.tools !== undefined ? { filter: this.options.tools } : {}),
             onStart: (call) => emit({ type: 'tool_start', call }),
             onUpdate: (callId, partial) => emit({ type: 'tool_update', callId, partial }),
           })
