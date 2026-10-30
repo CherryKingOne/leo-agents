@@ -14,6 +14,7 @@
 
 ```bash
 npm install && npm link          # install 时自动构建，link 后得到 leo 命令
+chmod +x dist/cli/main.js        # 命令授权
 leo auth set deepseek            # 保存密钥到 ~/.leo/credentials.json（或 export DEEPSEEK_API_KEY=...）
 cd your-project && leo           # 交互式 Agent：读写文件、搜索、执行命令、抓网页（写入/执行前会询问）
 leo -p -y "跑测试，失败就修"       # 一次性执行
