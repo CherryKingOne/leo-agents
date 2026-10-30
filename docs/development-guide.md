@@ -10,82 +10,192 @@ leo-agents 只做**底座**：一个插件内核 + 一个可直接商用的通�
 ## 目录
 
 1. [快速开始](#1-快速开始)
-2. [整体架构](#2-整体架构)
-3. [插件协议](#3-插件协议)
-4. [服务：注册、获取、替换](#4-服务注册获取替换)
-5. [事件与钩子](#5-事件与钩子)
-6. [开发工具（Tool）](#6-开发工具tool)
-7. [接入模型（Provider）](#7-接入模型provider)
-8. [上下文与提示词](#8-上下文与提示词)
-9. [Agent Loop 详解](#9-agent-loop-详解)
-10. [会话日志与存储](#10-会话日志与存储)
-11. [替换核心模块](#11-替换核心模块)
-12. [克隆后二次开发](#12-克隆后二次开发)
-13. [测试](#13-测试)
-14. [生产部署清单](#14-生产部署清单)
-15. [错误码](#15-错误码)
-16. [事件目录](#16-事件目录)
+2. [.leo 配置](#2-leo-配置)
+3. [整体架构](#3-整体架构)
+4. [插件协议](#4-插件协议)
+5. [服务：注册、获取、替换](#5-服务注册获取替换)
+6. [事件与钩子](#6-事件与钩子)
+7. [开发工具（Tool）](#7-开发工具tool)
+8. [接入模型（Provider）](#8-接入模型provider)
+9. [上下文与提示词](#9-上下文与提示词)
+10. [Agent Loop 详解](#10-agent-loop-详解)
+11. [会话日志与存储](#11-会话日志与存储)
+12. [替换核心模块](#12-替换核心模块)
+13. [克隆后二次开发](#13-克隆后二次开发)
+14. [测试](#14-测试)
+15. [生产部署清单](#15-生产部署清单)
+16. [错误码](#16-错误码)
+17. [事件目录](#17-事件目录)
 
 ---
 
 ## 1. 快速开始
 
+### 1.1 不写代码，直接用（leo 命令行）
+
 ```bash
 git clone https://github.com/CherryKingOne/leo-agents.git
-cd leo-agents
-npm install
-npm test              # 36 个用例，覆盖内核、loop、工具管线、OpenAI 适配器、会话存储
-npm run build
-npm run example:basic # 未设置 API Key 时用 MockProvider 离线演示
-DEEPSEEK_API_KEY=sk-xxx npm run example:basic
+cd leo-agents && npm install        # install 时自动 build
+npm link                            # 得到全局命令 leo（或用 node dist/cli/main.js 代替）
+
+leo auth set deepseek               # 输入密钥（隐藏输入），存到 ~/.leo/credentials.json，权限 600
+# 或者：export DEEPSEEK_API_KEY=sk-...
+
+cd ~/my-project
+leo                                 # 交互式：在当前目录读写文件、搜索、执行命令、抓网页
+leo "把 README 翻译成英文，存为 README.en.md"
+leo -p -y "跑一下测试，失败就修"     # 一次性执行，-y 自动批准写文件/执行命令
+git diff | leo -p "帮我写 commit message"
+leo -c                              # 继续上次会话
 ```
 
-最小代码：
+| 命令 | 作用 |
+|---|---|
+| `leo init` | 在当前目录创建 `.leo/`（配置模板、plugins 目录），把 `credentials.json`、`sessions/` 加进 `.gitignore`，可顺便保存密钥 |
+| `leo auth set <provider> [key] [--project]` | 保存密钥；默认用户级 `~/.leo`，`--project` 存到 `./.leo` |
+| `leo auth list` / `leo auth remove <provider>` | 查看（掩码）/ 删除密钥 |
+| `leo models` | 可用的提供方、默认模型、密钥来源 |
+| `leo doctor` | 诊断：读到了哪些配置文件、密钥从哪来、加载了哪些插件和工具 |
+
+内置工具：`read_file`、`write_file`、`edit_file`、`list_dir`、`grep`、`bash`、`web_fetch`。
+写文件和执行命令默认需要确认（`[y]是 / [n]否 / [a]本次会话都允许`）；非交互模式下没有人能确认，默认拒绝，加 `-y` 放行。
+**这不是沙箱**：生产或不受信任的任务请在容器 / 虚拟机里运行。
+
+### 1.2 在代码里用（同样读取 .leo 配置）
 
 ```ts
-import { createLeo, defineTool, OpenAICompatibleProvider, z } from 'leo-agents'
+import { createLeoFromConfig } from 'leo-agents'
 
-const leo = await createLeo({
-  providers: [
-    new OpenAICompatibleProvider({
-      id: 'deepseek',
-      baseURL: 'https://api.deepseek.com/v1',
-      apiKeyEnv: 'DEEPSEEK_API_KEY',
-      models: [{ id: 'deepseek-chat', contextWindow: 128_000, pricing: { inputPerMTok: 0.27, outputPerMTok: 1.1 } }],
-    }),
-  ],
-})
-
-leo.ctx.get('tools').register(
-  defineTool({
-    name: 'add',
-    description: '两数相加',
-    parameters: z.object({ a: z.number(), b: z.number() }),
-    execute: ({ a, b }) => String(a + b),
-  }),
-)
-
-const agent = leo.createAgent({ model: 'deepseek/deepseek-chat', systemPrompt: '你是一个助手' })
-
-// 流式
-for await (const ev of agent.prompt('2+3 等于几？')) {
+const app = await createLeoFromConfig()        // 读取 ~/.leo 与 ./.leo，自动探测密钥
+const agent = app.createAgent()                 // 默认模型、system prompt、内置工具、预算都来自配置
+for await (const ev of agent.prompt('总结 docs/ 目录下的文档')) {
   if (ev.type === 'text_delta') process.stdout.write(ev.text)
 }
+```
 
-// 非流式
-const r = await agent.run('再加 10 呢？')   // 同一个 agent = 同一个会话，自动带上历史
+### 1.3 完全手动组装（底座用法）
+
+```ts
+import { createLeo, deepseek, defineTool, z } from 'leo-agents'
+
+const leo = await createLeo({ plugins: [deepseek()] })     // 模型接入也是插件，读取 DEEPSEEK_API_KEY
+leo.ctx.get('tools').register(
+  defineTool({ name: 'add', description: '两数相加', parameters: z.object({ a: z.number(), b: z.number() }), execute: ({ a, b }) => String(a + b) }),
+)
+const agent = leo.createAgent({ model: 'deepseek/deepseek-chat', systemPrompt: '你是一个助手' })
+const r = await agent.run('2+3 等于几？')
 console.log(r.text, r.reason, r.usage)
 ```
 
-> 价格数字仅为示例，请按厂商官网填写。
+开发与测试：
+
+```bash
+npm test              # 45 个用例：内核、loop、工具管线、OpenAI 适配器、会话、配置/密钥/内置工具/第三方插件
+npm run build
+npm run example:basic # 未设置 API Key 时用 MockProvider 离线演示
+```
 
 ---
 
-## 2. 整体架构
+## 2. .leo 配置
+
+参考了 pi（`~/.pi/agent` + 项目 `.pi/`，settings / models / auth 分文件）和 DeepSeek Harness（凭据只按名字引用、存储与配置分离、配置错误加载即失败）的做法，调研笔记见 [config-research.md](config-research.md)。
+
+### 2.1 目录
+
+```
+~/.leo/                      用户级（LEO_HOME 可改位置）
+  config.json                默认配置
+  credentials.json           密钥（0600）
+  plugins/                   用户插件，自动加载 *.js / *.mjs / *.ts
+  sessions/                  不在项目里运行时的会话
+<项目>/.leo/                  项目级：从当前目录向上找第一个 .leo/
+  config.json                项目配置，覆盖用户配置（可以提交）
+  credentials.json           项目密钥（不要提交，leo init 已加入 .gitignore）
+  plugins/                   项目插件
+  sessions/                  会话日志 JSONL（不要提交）
+```
+
+合并：对象深合并（项目覆盖用户，CLI 参数最高）；`plugins` 拼接；同一插件模块只加载一次。
+
+### 2.2 config.json
+
+JSON，允许 `//` 整行注释。所有字段可选。
+
+```jsonc
+{
+  "model": "deepseek/deepseek-chat",            // 默认模型 <provider>/<model>；不写则取第一个可用提供方的默认模型
+  "providers": {
+    "deepseek": {},                              // 内置预设只写要改的字段
+    "openai":   { "baseURL": "https://my-gateway.example.com/v1" },
+    "vllm":     { "baseURL": "http://gpu01:8000/v1", "models": ["Qwen/Qwen3-32B"] },          // 任意 OpenAI 兼容端点
+    "acme":     { "baseURL": "https://api.acme.ai/v1", "apiKey": "$ACME_API_KEY",
+                  "headers": { "X-Org": "!cat ~/.acme/org" },
+                  "models": [{ "id": "acme-large", "contextWindow": 200000, "pricing": { "inputPerMTok": 1, "outputPerMTok": 3 } }] },
+    "claude":   { "type": "anthropic" },         // 非 OpenAI 协议：由插件注册的提供方类型处理（见 8.2）
+    "ollama":   { "enabled": false }
+  },
+  "plugins": ["leo-plugin-memory", ["./tools/my-plugin.mjs", { "foo": 1 }]],
+  "tools": {
+    "builtin": ["read_file", "grep", "bash"],    // false 关闭全部内置工具
+    "approval": "ask",                           // ask | auto | deny（作用于写文件、执行命令）
+    "workspace": ".",                            // 文件工具根目录，默认当前目录
+    "allowOutsideWorkspace": false,
+    "bashTimeoutMs": 120000
+  },
+  "agent": {
+    "systemPrompt": "…",                         // 覆盖默认 system prompt
+    "appendSystemPrompt": "本项目使用 pnpm，提交信息用中文",
+    "maxSteps": 50, "maxTurnTokens": 200000, "maxTurnCostUsd": 1, "turnTimeoutMs": 600000,
+    "maxOutputTokens": 8192, "temperature": 0.2
+  },
+  "sessions": { "persist": true, "dir": ".leo/sessions" },
+  "context": { "defaultContextWindow": 128000, "softLimitRatio": 0.85, "keepRecentTurns": 2 },
+  "logLevel": "warn"
+}
+```
+
+配置不合法（字段类型、枚举值）会在启动时直接报错，不会静默忽略。
+
+### 2.3 密钥
+
+| 写法 | 含义 |
+|---|---|
+| `credentials.json`：`{ "deepseek": "sk-..." }` | 推荐，`leo auth set` 写入，权限 600 |
+| `"apiKey": "$NAME"` / `"${NAME}"` | 读取环境变量 |
+| `"apiKey": "!op read op://dev/deepseek/key"` | 执行命令取输出（1Password、Keychain、vault），进程内缓存 |
+| `"apiKey": "sk-..."` | 字面值，不推荐提交到仓库 |
+| `DEEPSEEK_API_KEY` 等 | 内置预设的环境变量回退 |
+
+优先级：`--api-key` > 项目 `credentials.json` > 用户 `credentials.json` > 配置里的 `apiKey` > 环境变量。
+密钥在每次请求时解析，换密钥不用重启。所有提供方插件（含第三方）通过 `ctx.get('credentials')` 统一取密钥，这些来源对它们同样生效。
+
+内置预设：
+
+| id | baseURL | 环境变量 | 默认模型 |
+|---|---|---|---|
+| `deepseek` | https://api.deepseek.com/v1 | `DEEPSEEK_API_KEY` | deepseek-chat |
+| `openai` | https://api.openai.com/v1 | `OPENAI_API_KEY` | gpt-4o-mini |
+| `qwen` | https://dashscope.aliyuncs.com/compatible-mode/v1 | `DASHSCOPE_API_KEY` | qwen-plus |
+| `moonshot` | https://api.moonshot.cn/v1 | `MOONSHOT_API_KEY` | 需指定 |
+| `zhipu` | https://open.bigmodel.cn/api/paas/v4 | `ZHIPUAI_API_KEY` | 需指定 |
+| `siliconflow` | https://api.siliconflow.cn/v1 | `SILICONFLOW_API_KEY` | 需指定 |
+| `openrouter` | https://openrouter.ai/api/v1 | `OPENROUTER_API_KEY` | 需指定 |
+| `ollama` | http://localhost:11434/v1 | 无需密钥 | 需指定（需在配置中声明才加载） |
+
+检测到密钥的预设会自动启用，不需要写配置。默认模型会随厂商更新变化，以厂商文档为准，可以用 `model` 指定。
+
+### 2.4 安全提示
+
+项目 `.leo/` 里的插件和 `!command` 会以当前用户权限执行代码。克隆不受信任的仓库后，先检查 `.leo/` 再运行 `leo`。
+
+---
+
+## 3. 整体架构
 
 ```
 ┌──────────────────────── 你的应用（CLI / HTTP 服务 / Bot） ────────────────────────┐
-│  createLeo({ providers, plugins })  →  leo.createAgent()  →  agent.prompt()          │
+│  leo CLI / createLeoFromConfig()  →  createLeo({ plugins })  →  agent.prompt()       │
 └───────────────────────────────────────────────────────────────────────────────────────┘
 ┌────────────── 核心插件（全部可替换） ──────────────┐   ┌──────── 你的插件 ────────┐
 │ leo:sessions   → ctx.get('sessions')  会话日志      │   │ 工具 / Provider / 记忆   │
@@ -110,15 +220,19 @@ console.log(r.text, r.reason, r.usage)
 | `src/tools/` | `defineTool`、工具注册表、执行管线（预检 → 审批 → 守卫 → 执行 → 后处理） |
 | `src/context/` | system prompt 分层组装、token 预算、压缩策略、消息修复 |
 | `src/loop/` | `DefaultAgent`：通用 Agent Loop |
+| `src/providers/` | 模型接入插件：`openaiCompatible()`、内置预设 `deepseek()` 等、提供方类型注册表 `providerKinds` |
+| `src/config/` | `.leo` 配置发现与合并、密钥解析与凭据服务、`createLeoFromConfig()` |
+| `src/tools/builtin.ts` | 内置工具（文件 / 搜索 / bash / 网页）与审批策略插件 |
+| `src/cli/` | `leo` 命令行（只用公开 API 实现，也是接入示例） |
 | `src/leo.ts` | `createLeo()`：把内核和核心插件组装起来 |
 
 设计原则（来自 `docs/architecture-plan.md`）：**一切皆插件**；**插件之间只通过服务键协作**；**模型可见即已记录**；**默认安全（失败即关闭）**；**租户上下文贯穿全链路**。
 
 ---
 
-## 3. 插件协议
+## 4. 插件协议
 
-### 3.1 两种写法
+### 4.1 两种写法
 
 **写法 A：`definePlugin`（推荐用于正式插件）**
 
@@ -160,7 +274,7 @@ myExtension.inject = ['tools']          // 可选
 
 两种写法由同一个运行时加载：函数式插件会被规范化为 `{ name, inject, apply }`。
 
-### 3.2 插件字段
+### 4.2 插件字段
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
@@ -169,7 +283,7 @@ myExtension.inject = ['tools']          // 可选
 | `config` | 否 | zod schema。加载时 `safeParse`，失败抛 `plugin_config_invalid` |
 | `apply(ctx, config)` | 是 | 入口。可以是 async。抛异常时插件进入 `failed`，已做的注册会被撤销 |
 
-### 3.3 生命周期
+### 4.3 生命周期
 
 ```
 load ─▶ 校验 config ─▶ 依赖就绪？──否──▶ pending（等待服务出现）
@@ -194,7 +308,7 @@ active ─▶ dispose() ─▶ ctx.signal abort ─▶ LIFO 撤销所有注册�
 await ctx.effect(() => ctx.get('tools').register(myTool))
 ```
 
-### 3.4 加载插件
+### 4.4 加载插件
 
 ```ts
 // 启动时
@@ -221,7 +335,7 @@ console.log(leo.describe())
 `createLeo` 结束前会调用 `kernel.ready()`：如果有插件因为依赖缺失仍是 `pending`，或启动失败，会抛出
 `plugin_unresolved` 并列出缺失的服务，避免“静默不生效”。
 
-### 3.5 Context API 一览
+### 4.5 Context API 一览
 
 | 方法 | 说明 |
 |---|---|
@@ -229,7 +343,7 @@ console.log(leo.describe())
 | `ctx.get(key)` | 获取服务，缺失抛 `service_missing` |
 | `ctx.maybe(key)` / `ctx.has(key)` | 获取可选服务 / 判断是否存在 |
 | `ctx.on(event, handler, { prepend })` | 注册事件监听 |
-| `ctx.emit / parallel / serial / bail / waterfall` | 分发事件（见第 5 节） |
+| `ctx.emit / parallel / serial / bail / waterfall` | 分发事件（见第 6 节） |
 | `ctx.effect(setup)` | 注册任意副作用，`setup` 返回撤销函数 |
 | `ctx.plugin(p, config)` | 加载子插件 |
 | `ctx.fork({ tenant, agentId, sessionId })` | 派生作用域子上下文 |
@@ -237,7 +351,7 @@ console.log(leo.describe())
 | `ctx.signal` | 插件卸载时 abort，长任务要监听 |
 | `ctx.logger` | 带插件名的结构化日志 |
 
-### 3.6 发布插件包
+### 4.6 发布插件包
 
 插件包就是一个普通 npm 包，默认导出插件：
 
@@ -256,9 +370,9 @@ console.log(leo.describe())
 
 ---
 
-## 4. 服务：注册、获取、替换
+## 5. 服务：注册、获取、替换
 
-### 4.1 声明服务类型（declaration merging）
+### 5.1 声明服务类型（declaration merging）
 
 ```ts
 // my-plugin/types.ts
@@ -277,7 +391,7 @@ declare module 'leo-agents' {
 声明后，`ctx.get('kv')`、`ctx.provide('kv', ...)`、`inject: ['kv']` 都有类型检查与补全。
 未声明的键也能用（类型为 `unknown`），但强烈建议声明。
 
-### 4.2 提供与消费
+### 5.2 提供与消费
 
 ```ts
 const kvPlugin = definePlugin({
@@ -301,7 +415,7 @@ const consumer = definePlugin({
 
 > **原则**：插件之间只通过服务键协作，**不要 import 另一个插件的实现**。需要共享的只有类型。
 
-### 4.3 核心服务
+### 5.3 核心服务
 
 | 键 | 接口 | 默认实现 |
 |---|---|---|
@@ -314,9 +428,9 @@ const consumer = definePlugin({
 
 ---
 
-## 5. 事件与钩子
+## 6. 事件与钩子
 
-### 5.1 五种分发模式
+### 6.1 五种分发模式
 
 分发模式是事件契约的一部分，写在事件声明里：
 
@@ -338,7 +452,7 @@ ctx.on('tools/execute', async (p, next) => {
 })
 ```
 
-### 5.2 声明自定义事件
+### 6.2 声明自定义事件
 
 ```ts
 import type { EventDef } from 'leo-agents'
@@ -354,13 +468,13 @@ ctx.emit('kv/changed', { key: 'a', value: 'b' })
 const result = await ctx.waterfall('order/validate', order, (o) => defaultValidate(o))
 ```
 
-完整的内置事件列表见[第 16 节](#16-事件目录)。
+完整的内置事件列表见[第 17 节](#17-事件目录)。
 
 ---
 
-## 6. 开发工具（Tool）
+## 7. 开发工具（Tool）
 
-### 6.1 定义
+### 7.1 定义
 
 ```ts
 import { defineTool, toolOutput, z } from 'leo-agents'
@@ -395,7 +509,7 @@ export const readFile = defineTool({
 - `render(value, args)`：自定义给模型看的内容（例如只给摘要，完整数据放 `details`）。
 - 超长输出会按 `maxOutputChars`（默认 50k 字符）截断。
 
-### 6.2 注册
+### 7.2 注册
 
 ```ts
 // 在插件里（推荐，卸载自动撤销）
@@ -411,7 +525,7 @@ definePlugin({
 leo.ctx.get('tools').register(readFile)
 ```
 
-### 6.3 控制暴露给模型的工具
+### 7.3 控制暴露给模型的工具
 
 ```ts
 leo.createAgent({ model, tools: { tags: ['fs'] } })      // 只暴露带 fs 标签的
@@ -420,7 +534,7 @@ leo.createAgent({ model, tools: false })                 // 不使用工具
 leo.createAgent({ model, sequentialTools: true })        // 强制串行
 ```
 
-### 6.4 执行管线
+### 7.4 执行管线
 
 ```
 assistant 产出 tool calls
@@ -461,31 +575,82 @@ definePlugin({
 
 ---
 
-## 7. 接入模型（Provider）
+## 8. 接入模型（Provider）
 
-### 7.1 OpenAI 兼容端点（开箱即用）
+模型接入全部是插件：加载即注册到 `llm` 服务，卸载即撤销。三种方式，按需选最简单的：
+
+| 需求 | 做法 |
+|---|---|
+| 内置预设（DeepSeek、OpenAI、通义、Kimi、智谱、SiliconFlow、OpenRouter、Ollama） | 有密钥即自动启用；代码里 `plugins: [deepseek()]` |
+| 任意 OpenAI 兼容端点（vLLM、SGLang、网关、leo-inference） | `.leo/config.json` 写 `baseURL`；代码里 `openaiCompatible({...})` |
+| 其他协议 / 自定义认证 / 动态模型列表 | 写插件：注册提供方类型或直接注册 `LlmProvider` |
+
+### 8.1 内置预设与 OpenAI 兼容插件
 
 ```ts
-new OpenAICompatibleProvider({
-  id: 'deepseek',                         // 模型前缀：'deepseek/deepseek-chat'
-  baseURL: 'https://api.deepseek.com/v1',
-  apiKeyEnv: 'DEEPSEEK_API_KEY',          // 或 apiKey（不推荐明文）
-  models: [{ id: 'deepseek-chat', contextWindow: 128_000, maxOutputTokens: 8192, pricing: { inputPerMTok: 0.27, outputPerMTok: 1.1, cachedInputPerMTok: 0.07 } }],
-  connectTimeoutMs: 60_000,               // 等待响应头
-  idleTimeoutMs: 120_000,                 // 两个流分片间最大间隔
-  maxTokensField: 'max_tokens',           // OpenAI 新模型可改为 'max_completion_tokens'
-  sendReasoning: false,                   // 是否把历史 reasoning 以 reasoning_content 回传
-  headers: { /* 额外请求头 */ },
+import { createLeo, deepseek, openaiCompatible, qwen } from 'leo-agents'
+
+const leo = await createLeo({
+  plugins: [
+    deepseek(),                                             // DEEPSEEK_API_KEY 或 credentials 服务
+    qwen({ apiKey: '$MY_DASHSCOPE_KEY' }),                  // apiKey 支持 $ENV / !command / 字面值
+    openaiCompatible({
+      id: 'vllm',                                           // 模型前缀：'vllm/Qwen3-32B'
+      baseURL: 'http://gpu01:8000/v1',
+      models: [{ id: 'Qwen3-32B', contextWindow: 128_000, pricing: { inputPerMTok: 0, outputPerMTok: 0 } }],
+      connectTimeoutMs: 60_000,                             // 等待响应头
+      idleTimeoutMs: 120_000,                               // 两个流分片间最大间隔
+      maxTokensField: 'max_tokens',                         // OpenAI 新模型用 'max_completion_tokens'
+      sendReasoning: false,                                 // 是否把历史 reasoning 以 reasoning_content 回传
+      headers: { 'X-Org': '$ORG_ID' },                      // 请求头值也支持 $ENV / !command
+      default: true,                                        // 不带前缀的模型名走它
+    }),
+  ],
 })
 ```
 
-适用：OpenAI、DeepSeek、通义千问、Kimi、智谱、OpenRouter、vLLM、SGLang、leo-inference 等。
 已处理：SSE 跨块解析、`reasoning_content`、流式 tool call 拼接、usage（含缓存命中）、`Retry-After`、
-`insufficient_quota` 不重试、上下文超长识别为 `context_overflow`、连接/空闲超时。
+`insufficient_quota` 不重试、上下文超长识别为 `context_overflow`、连接/空闲超时、缺少密钥时给出 `leo auth set` 提示。
 
-多个 Provider 同时注册，按前缀路由；`providers` 数组中第一个为默认（不带前缀的模型名走默认）。
+已经有 `LlmProvider` 实例时用 `providerPlugin(instance)` 包装；`createLeo({ providers: [...] })` 仍然可用，等价于逐个包装。
 
-### 7.2 自定义 Provider
+### 8.2 提供方类型：让配置文件能用你的协议
+
+`.leo/config.json` 里每个提供方有 `type`（默认 `openai-compatible`）。插件可以注册新类型，
+之后用户只写配置就能用，不需要碰代码：
+
+```ts
+// leo-provider-anthropic/index.ts
+import { definePlugin } from 'leo-agents'
+import { AnthropicProvider } from './provider.js'   // 实现 LlmProvider（见 8.3）
+
+export default definePlugin({
+  name: 'leo-provider-anthropic',
+  inject: ['providerKinds'],
+  async apply(ctx) {
+    await ctx.effect(() =>
+      ctx.get('providerKinds').register('anthropic', ({ id, config, apiKey }) =>
+        new AnthropicProvider({ id, baseURL: config.baseURL ?? 'https://api.anthropic.com', apiKey }),   // apiKey() 每次请求时取值
+      ),
+    )
+  },
+})
+```
+
+```jsonc
+// .leo/config.json
+{
+  "plugins": ["leo-provider-anthropic"],
+  "providers": { "claude": { "type": "anthropic", "apiKey": "$ANTHROPIC_API_KEY", "models": ["claude-sonnet-4-5"] } },
+  "model": "claude/claude-sonnet-4-5"
+}
+```
+
+工厂收到的 `apiKey()` 已经接好凭据服务（`--api-key`、`credentials.json`、`$ENV`、`!command`）。
+加载顺序是：核心插件 → 凭据服务 → `providerKinds` → 配置里的插件 → 配置声明的提供方，所以插件注册的类型一定在提供方创建前就绪。
+不想走配置的插件，也可以直接 `ctx.get('llm').registerProvider(provider)`，密钥用 `ctx.maybe('credentials')?.get({ id, envKeys })` 获取。
+
+### 8.3 自定义 Provider
 
 实现 `LlmProvider`：
 
@@ -508,14 +673,14 @@ class MyProvider implements LlmProvider {
   getModelInfo(model) { return { id: model, contextWindow: 200_000 } }  // 可选
 }
 
-// 作为插件分发
 export default providerPlugin(new MyProvider())
 ```
 
 **错误码很重要**：loop 依据 `LeoError.code` 决定是否重试（`rate_limit` / `overloaded` / `timeout` / `network`）、
 是否压缩后重试（`context_overflow`）、还是直接失败（`auth` / `invalid_request`）。
 
-### 7.3 模型调用中间件
+### 8.4 模型调用中间件
+
 
 所有模型调用都经过 `llm/stream` waterfall，可用来做路由、降级、缓存、审计、脱敏：
 
@@ -528,9 +693,9 @@ ctx.on('llm/stream', async (p, next) => {
 
 ---
 
-## 8. 上下文与提示词
+## 9. 上下文与提示词
 
-### 8.1 构建流程
+### 9.1 构建流程
 
 每个 step 都会重新构建上下文：
 
@@ -544,7 +709,7 @@ ctx.on('llm/stream', async (p, next) => {
         ─▶ 组装 system + messages + tools，计算 fingerprint
 ```
 
-### 8.2 Prompt 分层片段
+### 9.2 Prompt 分层片段
 
 ```ts
 await ctx.effect(() =>
@@ -560,7 +725,7 @@ await ctx.effect(() =>
 稳定内容放前面的层（platform / tenant），易变内容放 runtime 层，有利于厂商 prompt cache 命中。
 `AgentOptions.systemPrompt` 自动作为 `agent` 层片段。`render` 可读取 `input.tenant`、`input.state`、`input.model` 等。
 
-### 8.3 记忆 / RAG 注入
+### 9.3 记忆 / RAG 注入
 
 ```ts
 ctx.on('context/transform', async ({ messages, input }, next) => {
@@ -571,7 +736,7 @@ ctx.on('context/transform', async ({ messages, input }, next) => {
 })
 ```
 
-### 8.4 压缩策略
+### 9.4 压缩策略
 
 默认 `truncate`：丢弃较早消息并放一条说明（零额外成本）。可换成摘要式：
 
@@ -596,9 +761,9 @@ definePlugin({
 
 ---
 
-## 9. Agent Loop 详解
+## 10. Agent Loop 详解
 
-### 9.1 一个 turn 的流程
+### 10.1 一个 turn 的流程
 
 ```
 prompt(input)
@@ -621,7 +786,7 @@ prompt(input)
  └─ 记录 turn/end，发 turn_end 事件，释放会话锁
 ```
 
-### 9.2 AgentOptions
+### 10.2 AgentOptions
 
 | 字段 | 说明 |
 |---|---|
@@ -639,7 +804,7 @@ prompt(input)
 
 `prompt()` / `run()` 的第二个参数可覆盖 limits，并传入外部 `signal`。
 
-### 9.3 事件流（AgentEvent）
+### 10.3 事件流（AgentEvent）
 
 | 事件 | 说明 |
 |---|---|
@@ -656,11 +821,11 @@ prompt(input)
 
 所有事件可直接 `JSON.stringify` 推给前端（SSE / WebSocket）。同时会在总线上以 `agent/event` 广播。
 
-### 9.4 结束原因（StopReason）
+### 10.4 结束原因（StopReason）
 
 `completed` · `max_steps` · `budget_exceeded` · `terminated_by_tool` · `length` · `rejected` · `cancelled` · `timeout` · `error`
 
-### 9.5 中途控制
+### 10.5 中途控制
 
 ```ts
 const agent = leo.createAgent({ model })
@@ -677,7 +842,7 @@ for await (const ev of agent.prompt('...')) {
 取消时：正在流式输出的部分文本会以 `meta.partial = true` 记录；未完成的工具调用会补记 `cancelled` 结果，
 保证会话日志可以回放、下一轮请求不会因为工具调用不配对而被厂商拒绝。
 
-### 9.6 Loop 的扩展点
+### 10.6 Loop 的扩展点
 
 | 需求 | 做法 |
 |---|---|
@@ -686,11 +851,11 @@ for await (const ev of agent.prompt('...')) {
 | 计费 | 监听 `usage/recorded` |
 | 实时推送 / 审计 | 监听 `agent/event`、`session/appended` |
 | 改写模型请求 | `llm/stream` |
-| 换一种 loop（plan-and-execute、多 agent） | 替换 `agentLoop` 服务（见第 11 节） |
+| 换一种 loop（plan-and-execute、多 agent） | 替换 `agentLoop` 服务（见第 12 节） |
 
 ---
 
-## 10. 会话日志与存储
+## 11. 会话日志与存储
 
 会话是**只追加的事件日志**（`SessionEvent`），事件类型：
 
@@ -718,7 +883,7 @@ for await (const ev of agent.prompt('...')) {
 
 ---
 
-## 11. 替换核心模块
+## 12. 替换核心模块
 
 任何核心服务都可以被插件覆盖，依赖它的插件会自动重启并使用新实现：
 
@@ -750,7 +915,7 @@ await kernel.ready()
 
 ---
 
-## 12. 克隆后二次开发
+## 13. 克隆后二次开发
 
 leo-agents 的定位是“底座”：可以作为 npm 依赖使用，也可以**克隆后直接改源码**。建议：
 
@@ -769,12 +934,12 @@ leo-agents 的定位是“底座”：可以作为 npm 依赖使用，也可以*
      index.ts     # 导出
    ```
    然后在 `src/index.ts` 导出，在 `src/leo.ts` 的 `createLeo` 中按需加载。
-4. 修改后运行 `npm run typecheck && npm test`；新增行为请补测试（见第 13 节）。
+4. 修改后运行 `npm run typecheck && npm test`；新增行为请补测试（见第 14 节）。
 5. 保留 `docs/architecture-plan.md` 中的原则：插件间只通过服务键协作、模型可见即已记录、失败即关闭。
 
 ---
 
-## 13. 测试
+## 14. 测试
 
 `MockProvider` 是确定性的脚本化模型，适合测试插件与 loop：
 
@@ -802,7 +967,7 @@ expect(mock.requests[1].messages.at(-1).role).toBe('tool')  // 断言模型收�
 
 ---
 
-## 14. 生产部署清单
+## 15. 生产部署清单
 
 - [ ] Provider 配置 `models`（上下文窗口、价格），否则预算按 128k 默认值、成本为 0
 - [ ] 设置 `limits`：`maxSteps`、`turnTimeoutMs`，按需 `maxTurnTokens` / `maxTurnCostUsd`
@@ -811,12 +976,14 @@ expect(mock.requests[1].messages.at(-1).role).toBe('tool')  // 断言模型收�
 - [ ] 监听 `usage/recorded` 接计费；`agent/pre-step` 做配额检查
 - [ ] `createLeo({ logger })` 接入 pino 等日志；监听 `agent/event` 接 tracing
 - [ ] 多租户：创建 Agent 时传 `tenant`，在策略、prompt 片段、计量中使用
-- [ ] API Key 用 `apiKeyEnv` 或密钥管理服务注入，不要写进代码
+- [ ] API Key 用 `credentials.json`（0600）、`$ENV` 或 `!command` 接密钥管理服务，不要写进代码或提交到仓库
+- [ ] 需要多租户密钥时，替换 `credentials` 服务（按 `tenant` 查找）
+- [ ] 内置 `bash` / 文件工具不是沙箱：在容器 / 微 VM 中运行，或用插件替换为沙箱实现；`tools.approval` 按场景设为 ask / deny
 - [ ] 工具实现必须遵守 `exec.signal`；有副作用的工具不要标 `idempotent`
 
 ---
 
-## 15. 错误码
+## 16. 错误码
 
 | code | 含义 | loop 行为 |
 |---|---|---|
@@ -834,7 +1001,7 @@ expect(mock.requests[1].messages.at(-1).role).toBe('tool')  // 断言模型收�
 
 ---
 
-## 16. 事件目录
+## 17. 事件目录
 
 | 事件 | 模式 | 载荷 → 返回 | 说明 |
 |---|---|---|---|
@@ -850,3 +1017,5 @@ expect(mock.requests[1].messages.at(-1).role).toBe('tool')  // 断言模型收�
 | `agent/event` | emit | `{ agent, event }` | AgentEvent 旁路广播 |
 | `usage/recorded` | emit | `{ agentId, sessionId, turnId, stepId, model, usage, tenant }` | 计量 |
 | `session/appended` | emit | `SessionEvent` | 会话事件写入后 |
+
+可选服务（由 `createLeoFromConfig` / CLI 提供）：`credentials`（密钥查找）、`providerKinds`（提供方类型注册表）、`approval`（人工审批）。
