@@ -17,6 +17,7 @@ import { PROVIDER_PRESETS } from '../providers/catalog.js'
 import type { ApprovalService } from '../tools/types.js'
 import { type CliArgs, HELP, parseArgs } from './args.js'
 import { addPlugin, DEFAULT_PLUGIN_REGISTRY, defaultIo, loadRegistry, removePlugin } from './plugin.js'
+import { runApiServer } from '../api/server.js'
 import { askSecret, c, makeRl, oneLine, readStdin } from './ui.js'
 
 const out = process.stdout
@@ -56,6 +57,8 @@ async function main(argv: string[]): Promise<number> {
     case 'plugin':
     case 'plugins':
       return cmdPlugin(cwd, args)
+    case 'api':
+      return cmdApi(cwd, args)
     default:
       return cmdRun(cwd, args)
   }
@@ -277,6 +280,55 @@ async function cmdDoctor(cwd: string, args: CliArgs): Promise<number> {
   log(`  ${config.sessions.persist ? (config.sessions.dir ?? join(paths.projectDir ?? paths.userDir, 'sessions')) : '(内存，不持久化)'}`)
   await app.dispose()
   return app.model ? 0 : 1
+}
+
+// —— leo api ——————————————————————————————————————————————————————————————
+async function cmdApi(cwd: string, args: CliArgs): Promise<number> {
+  const host = args.host ?? process.env.LEO_API_HOST ?? '127.0.0.1'
+  const port = args.port ?? (process.env.LEO_API_PORT ? Number(process.env.LEO_API_PORT) : 8765)
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    log(c.red(`✗ 无效端口：${port}`))
+    return 2
+  }
+  const token = args.token ?? process.env.LEO_API_TOKEN
+  let app: LeoApp
+  try {
+    app = await createLeoFromConfig({
+      cwd,
+      overrides: {
+        ...(args.model ? { model: args.model } : {}),
+        ...(args.yes || args.noTools ? { tools: { ...(args.yes ? { approval: 'auto' } : {}), ...(args.noTools ? { builtin: false } : {}) } } : {}),
+      },
+    })
+  } catch (e) {
+    log(c.red(`✗ ${(e as Error).message}`))
+    return 1
+  }
+  const { config, paths } = app.resolved
+  const sessionsDir = config.sessions.persist
+    ? config.sessions.dir
+      ? resolve(paths.projectRoot ?? cwd, config.sessions.dir)
+      : join(paths.projectDir ?? paths.userDir, 'sessions')
+    : undefined
+  const approval = args.yes ? 'auto' : config.tools.approval
+  log(c.gray(`leo ${version()} · api · ${app.model ?? '(无默认模型)'} · 审批 ${approval}${approval === 'ask' ? '（API 模式无人审批，写文件/执行命令会被拒绝，可加 -y）' : ''}`))
+  if (!app.model) log(c.yellow('还没有可用的模型：聊天接口会返回错误，插件与工具接口仍可使用。运行 leo auth set <provider> 配置密钥'))
+  if (!token && host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') log(c.yellow(`⚠ 监听 ${host} 且未设置 --token，任何能访问该地址的人都能调用 leo`))
+  try {
+    return await runApiServer(
+      {
+        leo: app.leo,
+        ...(app.model ? { model: app.model } : {}),
+        createAgent: (o) => app.createAgent(o),
+        ...(sessionsDir ? { sessionsDir } : {}),
+        providers: app.providers.map((p) => ({ id: p.id, name: p.name, loaded: p.loaded, defaultModel: p.defaultModel ?? null, reason: p.reason ?? null })),
+        info: { version: version(), cwd, projectRoot: paths.projectRoot ?? null, approval },
+      },
+      { host, port, ...(token ? { token } : {}), ...(args.python ? { python: args.python } : {}), log },
+    )
+  } finally {
+    await app.dispose()
+  }
 }
 
 // —— leo / leo run ——————————————————————————————————————————————————————

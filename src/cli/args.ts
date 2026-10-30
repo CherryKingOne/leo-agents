@@ -20,9 +20,13 @@ export interface CliArgs {
   global: boolean
   npm: boolean
   registry?: string
+  host?: string
+  port?: number
+  token?: string
+  python?: string
 }
 
-const COMMANDS = new Set(['run', 'chat', 'init', 'auth', 'models', 'doctor', 'plugin', 'plugins', 'help', 'version'])
+const COMMANDS = new Set(['run', 'chat', 'init', 'auth', 'models', 'doctor', 'plugin', 'plugins', 'api', 'help', 'version'])
 
 export function parseArgs(argv: string[]): CliArgs {
   const a: CliArgs = { positionals: [], print: false, yes: false, continue: false, json: false, noTools: false, project: false, reasoning: false, help: false, version: false, global: false, npm: false }
@@ -51,6 +55,10 @@ export function parseArgs(argv: string[]): CliArgs {
       case '-g': case '--global': a.global = true; break
       case '--npm': a.npm = true; break
       case '--registry': a.registry = val(); break
+      case '--host': a.host = val(); break
+      case '--port': a.port = Number(val()); break
+      case '--token': a.token = val(); break
+      case '--python': a.python = val(); break
       case '-h': case '--help': a.help = true; break
       case '-v': case '--version': a.version = true; break
       case '--': rest.push(...argv.slice(i + 1)); i = argv.length; break
@@ -81,6 +89,8 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
   leo plugin list             查看已安装的插件与官方插件仓库
   leo plugin add <id> [-g] [--npm]      安装插件（默认下载单文件到 .leo/plugins/，-g 装到 ~/.leo，--npm 用 npm 安装）
   leo plugin remove <id> [-g]           移除插件
+  leo api [--host 127.0.0.1] [--port 8765] [--token <t>]
+                              以 HTTP API 服务方式启动（Python 服务 + 常驻 leo，插件一直在线），不进入对话
 
 选项
   -m, --model <p/m>           指定模型，如 deepseek/deepseek-chat
@@ -94,6 +104,9 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
       --max-steps <n>         单次任务最多模型调用次数
       --cwd <dir>             工作目录
       --registry <url|path>   插件仓库地址（默认官方仓库，也可用 LEO_PLUGIN_REGISTRY）
+      --host / --port         leo api 监听地址（默认 127.0.0.1:8765，也可用 LEO_API_HOST / LEO_API_PORT）
+      --token <t>             leo api 访问令牌（也可用 LEO_API_TOKEN）；监听非本机地址时建议设置
+      --python <bin>          leo api 使用的 Python 解释器（默认 LEO_PYTHON、python3、python）
   -h, --help / -v, --version
 
 内置提供方：deepseek, openai, qwen, moonshot, zhipu, siliconflow, openrouter, ollama
