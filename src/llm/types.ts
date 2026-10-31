@@ -22,8 +22,29 @@ export interface LlmRequest {
   temperature?: number
   topP?: number
   stop?: string[]
-  /** 透传给厂商 API 的额外参数（如 response_format、reasoning_effort） */
+  /**
+   * 思考模式与推理强度。各厂商插件把它翻译成自己的参数（如 DeepSeek 的 `thinking` / `reasoning_effort`）；
+   * 不写由模型 / 厂商决定。不支持思考的模型忽略它
+   */
+  reasoning?: ReasoningOptions
+  /** 透传给厂商 API 的额外参数（如 response_format） */
   providerOptions?: Record<string, unknown>
+}
+
+/**
+ * 推理强度。通用档位：`none` 关闭思考；`minimal` / `low` / `medium` / `high` / `xhigh` / `max` 逐级增强。
+ * 每个模型实际支持哪些档位见 `ModelInfo.reasoning.efforts`，厂商插件负责把不支持的档位映射到最接近的一档
+ */
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export const REASONING_EFFORTS: readonly ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/** 思考模式开关与推理强度（`LlmRequest.reasoning`、Agent / 配置的 `reasoning`） */
+export interface ReasoningOptions {
+  /** 是否开启思考模式；不写由模型决定（多数思考模型默认开启） */
+  enabled?: boolean
+  /** 推理强度；`none` 等同 `enabled: false` */
+  effort?: ReasoningEffort
 }
 
 export type FinishReason = 'stop' | 'tool_calls' | 'length' | 'content_filter' | 'other'
@@ -45,10 +66,39 @@ export interface ModelPricing {
 }
 
 export interface ModelInfo {
+  /** 发给厂商 API 的真实模型 id，如 `deepseek-flash` */
   id: string
+  /** 展示名，如 “DeepSeek-V4.1-Flash” */
+  name?: string
   contextWindow: number
   maxOutputTokens?: number
   pricing?: ModelPricing
+  /** 接受的输入类型，如 `['text', 'image']` */
+  inputModalities?: string[]
+  /** 可生成的输出类型，如 `['text']` */
+  outputModalities?: string[]
+  /** 思考能力；不写表示未知 */
+  reasoning?: ModelReasoningInfo
+  /** 拥有该模型的组织（厂商 /models 的 owned_by） */
+  ownedBy?: string
+  /** 别名：仍可使用但不单独展示的旧名字（如已下线、被自动改写的模型名） */
+  alias?: boolean
+  /** 元信息来源：`remote` 从厂商接口实时获取，`builtin` 插件内置 */
+  source?: 'remote' | 'builtin'
+}
+
+/** 模型的思考能力（`ModelInfo.reasoning`） */
+export interface ModelReasoningInfo {
+  /** 是否支持思考模式 */
+  supported: boolean
+  /** 能否关闭思考 */
+  canDisable?: boolean
+  /** 不指定时是否开启思考 */
+  defaultEnabled?: boolean
+  /** 开启思考时可用的推理强度档位，按建议的展示顺序（不含 `none`） */
+  efforts?: ReasoningEffort[]
+  /** 开启思考且未指定强度时的默认档位 */
+  defaultEffort?: ReasoningEffort
 }
 
 export interface StreamOptions {
@@ -77,8 +127,13 @@ export interface LlmProvider {
   readonly name?: string
   /** 可选：未指定模型时用的模型 id（不带前缀）。宿主没配置 `model` 时，默认 provider 的这个模型就是默认模型 */
   readonly defaultModel?: string
-  /** 可选：已知模型列表（`leo models` 展示） */
+  /** 可选：已知模型列表（`leo models` 展示）。实现了 refreshModels 时应返回最近一次获取到的结果 */
   listModels?(): ModelInfo[]
+  /**
+   * 可选：向厂商接口实时获取模型列表与详情（如 `GET /models`），并更新 listModels / getModelInfo 的结果。
+   * 获取失败时抛错，调用方会退回 listModels
+   */
+  refreshModels?(opts?: { signal?: AbortSignal }): Promise<ModelInfo[]>
   /**
    * 可选：当前是否可用及原因（例如缺密钥）。不提供视为可用。
    * 不可用的 provider 仍可注册（这样 `leo doctor` 能看到它缺什么），但不会被选作默认模型
@@ -120,4 +175,17 @@ export interface LlmService {
   stream(model: string, request: Omit<LlmRequest, 'model'>, opts: StreamOptions): AsyncIterable<LlmStreamEvent>
   /** 估算 token：优先使用 provider.countTokens，否则按字符近似 */
   countTokens(model: string, request: Omit<LlmRequest, 'model'>): Promise<number>
+  /**
+   * 所有 provider 的模型（不含别名）。`refresh: true` 时先调用各 provider 的 refreshModels 实时获取，
+   * 失败的 provider 退回 listModels 并在 `error` 里给出原因
+   */
+  models(opts?: { refresh?: boolean; signal?: AbortSignal; provider?: string }): Promise<ProviderModels[]>
+}
+
+/** `llm.models()` 的一项：一个 provider 及其模型 */
+export interface ProviderModels {
+  provider: LlmProvider
+  models: ModelInfo[]
+  /** 实时获取失败的原因（此时 models 为内置列表） */
+  error?: string
 }

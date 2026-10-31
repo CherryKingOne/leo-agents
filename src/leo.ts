@@ -52,7 +52,7 @@ export interface Leo {
  * import provider from 'leo-plugin-provider'
  * import deepseek from 'leo-plugin-provider-deepseek'
  * const leo = await createLeo({ plugins: [provider, deepseek, weatherPlugin] })   // 读取 DEEPSEEK_API_KEY
- * const agent = leo.createAgent({ model: 'deepseek/deepseek-chat', systemPrompt: '你是一个助手' })
+ * const agent = leo.createAgent({ model: 'deepseek/deepseek-flash', systemPrompt: '你是一个助手' })
  * for await (const ev of agent.prompt('北京天气如何？')) { ... }
  * ```
  */

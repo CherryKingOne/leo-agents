@@ -56,7 +56,8 @@ leo -c                              # 继续上次会话
 | `leo init` | 在当前目录创建 `.leo/`（配置模板、plugins 目录），把 `credentials.json`、`sessions/` 加进 `.gitignore`，可顺便保存密钥 |
 | `leo auth set <provider> [key] [--project]` | 保存密钥；默认用户级 `~/.leo`，`--project` 存到 `./.leo` |
 | `leo auth list` / `leo auth remove <provider>` | 查看（掩码）/ 删除密钥 |
-| `leo models` | 可用的提供方、默认模型、密钥来源 |
+| `leo models [provider] [--offline]` | 可用的提供方与全部模型：从厂商接口实时获取真实模型名与详情（展示名、上下文、最大输出、输入模态、思考与推理强度档位），获取失败退回插件内置列表；还有密钥来源 |
+| `leo --thinking on\|off` / `leo --effort <level>` | 本次运行开关思考模式、设置推理强度（`none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`，`none` 即关闭思考）。交互中用 `/models`、`/model <编号>`、`/think on\|off`、`/effort <level>` |
 | `leo doctor` | 诊断：读到了哪些配置文件、密钥从哪来、加载了哪些插件和工具 |
 | `leo serve [-y]` | 后台常驻：不进入对话，只加载配置与插件并保持在线（热加载照常），Ctrl+C 停止。给网关、渠道机器人这类“自己接活”的插件用，例如 `leo plugin add gateway && leo serve` |
 
@@ -144,7 +145,8 @@ JSON，允许 `//` 整行注释。所有字段可选。
     "systemPrompt": "…",                         // 覆盖默认 system prompt
     "appendSystemPrompt": "本项目使用 pnpm，提交信息用中文",
     "maxSteps": 50, "maxTurnTokens": 200000, "maxTurnCostUsd": 1, "turnTimeoutMs": 600000,
-    "maxOutputTokens": 8192, "temperature": 0.2
+    "maxOutputTokens": 8192, "temperature": 0.2,
+    "reasoning": { "enabled": true, "effort": "high" }   // 思考模式与推理强度；不写由模型决定
   },
   "sessions": { "persist": true, "dir": ".leo/sessions" },
   "context": { "defaultContextWindow": 128000, "softLimitRatio": 0.85, "keepRecentTurns": 2 },
@@ -686,6 +688,9 @@ Agent ⇄ llm 服务（底座）
 - `ctx.maybe('credentials')`：统一取密钥（`--api-key`、`credentials.json`、`$ENV`、`!command`）
 - `ctx.maybe('leoConfig')`：合并后的 `.leo/config.json`（只读），读默认模型 `model` 与 0.1.x 的 `providers`
 - `LlmProvider` 的可选字段 `name`、`defaultModel`、`listModels()`、`status()`：`leo models` / `leo doctor` 据此显示；`status().ready === false`（如缺密钥）的 provider 不会被选为默认模型
+- `LlmProvider.refreshModels()`（可选，0.2.0）：向厂商接口实时获取模型列表（如 `GET /models`），`llm.models({ refresh: true })` 与 `leo models` 调用它，失败时退回 `listModels()`
+- `ModelInfo`（0.2.0 起）除 `id` / `contextWindow` / `maxOutputTokens` / `pricing` 外还有：`name`（展示名）、`inputModalities` / `outputModalities`、`reasoning: { supported, canDisable, defaultEnabled, efforts, defaultEffort }`、`ownedBy`、`alias`（旧名字，可用但不展示）、`source`（`remote` / `builtin`）
+- `LlmRequest.reasoning`（0.2.0）：统一的思考控制 `{ enabled?: boolean, effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }`，来自 `AgentOptions.reasoning` 或配置 `agent.reasoning`。各厂商插件翻译成自己的参数（DeepSeek：`thinking` / `reasoning_effort`），把模型不支持的档位映射到最接近的一档；不写由模型决定
 - 插件不能运行时 import leo-agents，抛不出 `LeoError` 实例：抛带 `Symbol.for('leo.error')` 标记和 `code` 的普通 Error，宿主按 code 处理（`LEO_ERROR_MARK`）
 
 ```ts
@@ -845,6 +850,7 @@ prompt(input)
 | `toolChoice` | `'auto' \| 'none' \| 'required' \| { name }` |
 | `sequentialTools` | 强制工具串行 |
 | `maxOutputTokens` / `temperature` / `topP` / `stop` / `providerOptions` | 模型参数 |
+| `reasoning` | 思考模式与推理强度 `{ enabled?, effort? }`，由厂商插件翻译（见 8.1） |
 | `tenant` | 租户上下文，贯穿工具、计量、prompt 片段 |
 | `state` | 任意状态，供 prompt 片段和插件读取 |
 | `label` | 给人看的名字（如 `sub-agent:explorer`）。CLI 审批提示会显示它，用来区分是哪个 Agent 发起的 |

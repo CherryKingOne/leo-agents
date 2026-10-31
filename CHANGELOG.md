@@ -2,7 +2,7 @@
 
 ## 0.2.0 — 2026-10-31
 
-> 在 `feat/provider-plugin` 分支发布，未合并到 main。需要配合 leo-plugin 的 `provider` 与 `provider-deepseek` 插件使用。
+> 需要配合 leo-plugin 的 `provider` 与 `provider-deepseek` 插件（0.2.0）使用。
 
 **破坏性变更：模型供应商插件化，底座不再内置任何模型厂商。**
 
@@ -15,6 +15,17 @@
 - `leo init` 不再列内置厂商，只问密钥并提示安装 `provider` / `provider-deepseek`；没有模型时按“没装注册层”“没有驱动”“缺密钥”分别提示
 - `.leo/config.json` 模板不再写 `providers`
 - `credentials` 服务的类型声明移到 `config/create.ts`
+
+### 补充：真实模型列表、思考模式与推理强度
+
+- 思考过程默认显示（灰色 💭，写到 stderr，不影响 `-p` 的 stdout 输出）；`--hide-thinking` / `--no-reasoning` 或交互 `/think hide` 隐藏，`/think show` 恢复。原 `--reasoning` 保留为兼容写法
+- 每轮统计显示思考 token 数，例如 `30↓（思考 20） tokens`
+- `ModelInfo` 新增 `name`（展示名）、`inputModalities` / `outputModalities`、`reasoning`（是否支持思考、能否关闭、默认开关、可用强度档位与默认档位）、`ownedBy`、`alias`、`source`
+- `LlmProvider` 新增可选 `refreshModels()`：向厂商接口实时获取模型列表与详情；`llm` 服务新增 `models({ refresh })`，获取失败的 provider 退回内置列表并给出原因，别名不展示
+- `LlmRequest` / `AgentOptions` 新增 `reasoning: { enabled?, effort? }`，配置 `agent.reasoning` 设默认值；由厂商插件翻译成各自参数
+- `leo models [provider] [--offline]`：列出每个提供方的全部真实模型及详情（默认实时获取），标出默认模型
+- 新增 `--thinking on|off`（`--no-thinking`）、`--effort <level>`；交互命令 `/models` 编号列出模型、`/model <编号>` 切换，`/think on|off`、`/effort <level>` 运行中调整（保留当前会话）；状态行显示思考设置
+- 配置模板与示例里的模型名改为 `deepseek-flash`
 
 ## 0.1.2 — 2026-10-31
 

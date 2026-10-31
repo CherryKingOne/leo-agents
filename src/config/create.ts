@@ -331,6 +331,7 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
       ...(a.maxOutputTokens ? { maxOutputTokens: a.maxOutputTokens } : {}),
       ...(a.temperature !== undefined ? { temperature: a.temperature } : {}),
       ...o,
+      ...(a.reasoning || o.reasoning ? { reasoning: { ...a.reasoning, ...o.reasoning } } : {}),
       model: m,
       limits,
     }

@@ -2,7 +2,7 @@ import { LeoError } from '../errors.js'
 import type { Context } from '../kernel/context.js'
 import { definePlugin, type PluginDefinition } from '../kernel/plugin.js'
 import type { Disposer, EventDef } from '../kernel/types.js'
-import type { LlmProvider, LlmRequest, LlmService, LlmStreamEvent, ResolvedModel, StreamOptions } from './types.js'
+import type { LlmProvider, LlmRequest, LlmService, LlmStreamEvent, ModelInfo, ProviderModels, ResolvedModel, StreamOptions } from './types.js'
 
 declare module '../kernel/types.js' {
   interface Services {
@@ -78,6 +78,34 @@ class DefaultLlmService implements LlmService {
     const { provider, model: id } = this.resolve(model)
     if (provider.countTokens) return provider.countTokens({ ...request, model: id })
     return approximateTokens(request)
+  }
+
+  async models(opts: { refresh?: boolean; signal?: AbortSignal; provider?: string } = {}): Promise<ProviderModels[]> {
+    const list = opts.provider ? this.list.filter((p) => p.id === opts.provider) : [...this.list]
+    if (opts.provider && !list.length) throw new LeoError('invalid_request', `Unknown LLM provider "${opts.provider}"`)
+    return Promise.all(
+      list.map(async (provider): Promise<ProviderModels> => {
+        let error: string | undefined
+        let models: ModelInfo[] | undefined
+        if (opts.refresh && provider.refreshModels) {
+          try {
+            models = await provider.refreshModels(opts.signal ? { signal: opts.signal } : {})
+          } catch (err) {
+            error = (err as Error).message
+          }
+        }
+        if (!models) {
+          try {
+            models = provider.listModels?.() ?? []
+          } catch (err) {
+            error ??= (err as Error).message
+            models = []
+          }
+        }
+        const visible = models.filter((m) => !m.alias)
+        return error ? { provider, models: visible, error } : { provider, models: visible }
+      }),
+    )
   }
 }
 

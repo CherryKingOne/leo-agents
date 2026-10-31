@@ -1,7 +1,7 @@
 import type { LeoError, LeoErrorCode } from '../errors.js'
 import type { Context } from '../kernel/context.js'
 import type { TenantContext } from '../kernel/types.js'
-import type { FinishReason, ToolChoice } from '../llm/types.js'
+import type { FinishReason, ReasoningOptions, ToolChoice } from '../llm/types.js'
 import type { AgentMessage, ToolCallBlock, Usage, UserInput } from '../protocol/messages.js'
 import type { ToolFilter, ToolResult } from '../tools/types.js'
 
@@ -42,6 +42,8 @@ export interface AgentOptions {
   temperature?: number
   topP?: number
   stop?: string[]
+  /** 思考模式与推理强度（由厂商插件翻译成各自参数） */
+  reasoning?: ReasoningOptions
   providerOptions?: Record<string, unknown>
   tenant?: TenantContext
   /** 任意 agent 状态，供 prompt 片段、插件使用 */

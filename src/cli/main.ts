@@ -15,6 +15,8 @@ import type { Agent, AgentEvent } from '../loop/types.js'
 import { textOf } from '../protocol/messages.js'
 import type { ApprovalService } from '../tools/types.js'
 import { type CliArgs, HELP, parseArgs } from './args.js'
+import { collectModels, describeModel, describeReasoning, type ModelChoice, parseEffort, parseSwitch, withEffort, withThinking } from './models.js'
+import type { ReasoningOptions } from '../llm/types.js'
 import { addPlugin, DEFAULT_PLUGIN_REGISTRY, defaultIo, initPlugin, loadRegistry, uninstallPlugin } from './plugin.js'
 import { askSecret, c, makeRl, oneLine, readStdin } from './ui.js'
 
@@ -66,7 +68,7 @@ async function main(argv: string[]): Promise<number> {
 const CONFIG_TEMPLATE = `{
   // leo 项目配置。完整说明见 docs/development-guide.md「.leo 配置」一节
   // 默认模型：<provider>/<model>。不写时用模型供应商插件的默认模型
-  // "model": "deepseek/deepseek-chat",
+  // "model": "deepseek/deepseek-flash",   // 可选模型：leo models
 
   // 模型供应商由插件提供，底座不内置任何厂商：
   //   leo plugin add provider            注册层（自带通用 OpenAI 兼容协议，配置在 .leo/provider.json）
@@ -84,6 +86,8 @@ const CONFIG_TEMPLATE = `{
 
   "agent": {
     "maxSteps": 50
+    // 思考模式与推理强度（不写由模型决定，DeepSeek 默认开启、强度 high；各模型支持的档位见 leo models）
+    // "reasoning": { "enabled": true, "effort": "high" },
     // "systemPrompt": "覆盖默认 system prompt",
     // "appendSystemPrompt": "追加的项目约定"
   }
@@ -273,11 +277,29 @@ async function cmdModels(cwd: string, args: CliArgs): Promise<number> {
   const app = await createLeoFromConfig({ cwd, ...(args.model ? { overrides: { model: args.model } } : {}) })
   try {
     if (!app.providers.length) log(c.yellow(noProviderHint(app)))
-    for (const p of app.providers) {
-      const mark = p.loaded ? c.green('●') : c.gray('○')
-      log(`${mark} ${p.id.padEnd(12)} ${c.gray(p.name)}  ${p.loaded ? `默认模型 ${p.defaultModel ?? '(需指定)'}` : c.yellow(p.reason ?? '')}  ${c.gray(`密钥 ${p.credential.masked}${p.credential.source ? ` (${p.credential.source})` : ''}${p.via ? ` · ${p.via}` : ''}`)}`)
+    const only = args.positionals[0]
+    if (only && !app.providers.some((p) => p.id === only)) {
+      log(c.red(`没有提供方 "${only}"`))
+      return 1
     }
-    log(`\n当前默认：${app.model ? c.bold(app.model) : c.yellow('(无)')}`)
+    const statuses = new Map(app.providers.map((p) => [p.id, p]))
+    const { groups } = await collectModels(app.leo.ctx.get('llm'), { refresh: !args.offline, ...(only ? { provider: only } : {}) })
+    for (const g of groups) {
+      const p = statuses.get(g.provider.id)
+      if (!p) continue
+      const mark = p.loaded ? c.green('●') : c.gray('○')
+      log(`${mark} ${c.bold(p.id)} ${c.gray(p.name)}  ${p.loaded ? '' : c.yellow(`${p.reason ?? ''}  `)}${c.gray(`密钥 ${p.credential.masked}${p.credential.source ? ` (${p.credential.source})` : ''}${p.via ? ` · ${p.via}` : ''}`)}`)
+      if (g.error) log(c.yellow(`    实时获取模型失败（${g.error}），以下为插件内置列表`))
+      else if (!args.offline && g.models.some((m) => m.source === 'builtin') && p.loaded) log(c.gray('    （该提供方不支持实时获取，以下为插件内置列表）'))
+      if (!g.models.length) log(c.gray(`    （没有已知模型，用 ${p.id}/<model> 指定）`))
+      for (const m of g.models) {
+        const isDefault = m.id === p.defaultModel
+        log(`    ${isDefault ? c.green('*') : ' '} ${`${p.id}/${m.id}`.padEnd(28)} ${c.gray(describeModel(m))}`)
+      }
+    }
+    log(`\n当前默认：${app.model ? c.bold(app.model) : c.yellow('(无)')}${c.gray('（* 为各提供方默认模型；切换：leo -m <provider/model>，或交互中 /model）')}`)
+    const r = app.resolved.config.agent.reasoning
+    if (r) log(c.gray(`思考设置（配置）：${describeReasoning(r)}`))
     return 0
   } finally {
     await app.dispose()
@@ -406,20 +428,28 @@ function render(ev: AgentEvent, args: CliArgs, state: { midLine: boolean; reason
   switch (ev.type) {
     case 'reasoning_delta':
       if (args.reasoning) {
-        if (!state.reasoning) err.write(c.gray('思考：'))
+        if (!state.reasoning) {
+          if (state.midLine) out.write('\n')
+          state.midLine = false
+          err.write(c.gray('💭 '))
+        }
         state.reasoning = true
         err.write(c.gray(ev.text))
       }
       break
     case 'text_delta':
       if (state.reasoning) {
-        err.write('\n')
+        err.write('\n\n')
         state.reasoning = false
       }
       out.write(ev.text)
       state.midLine = !ev.text.endsWith('\n')
       break
     case 'tool_start': {
+      if (state.reasoning) {
+        err.write('\n')
+        state.reasoning = false
+      }
       ensureNewline()
       const a = ev.call.arguments as Record<string, unknown> | undefined
       const preview = a ? (typeof a.command === 'string' ? a.command : typeof a.path === 'string' ? a.path : typeof a.url === 'string' ? a.url : typeof a.pattern === 'string' ? a.pattern : JSON.stringify(a)) : ''
@@ -448,11 +478,15 @@ function render(ev: AgentEvent, args: CliArgs, state: { midLine: boolean; reason
       log(c.gray(`（上下文已压缩：${ev.strategy}）`))
       break
     case 'turn_end': {
+      if (state.reasoning) {
+        err.write('\n')
+        state.reasoning = false
+      }
       ensureNewline()
       const u = ev.usage
       const cost = u.costUsd ? ` · $${u.costUsd.toFixed(4)}` : ''
       if (ev.reason !== 'completed') log(c.yellow(`[${ev.reason}]${ev.error ? ` ${ev.error.message}` : ''}`))
-      log(c.gray(`${ev.steps} 步 · ${u.inputTokens}↑ ${u.outputTokens}↓ tokens${cost}`))
+      log(c.gray(`${ev.steps} 步 · ${u.inputTokens}↑ ${u.outputTokens}↓${u.reasoningTokens ? `（思考 ${u.reasoningTokens}）` : ''} tokens${cost}`))
       break
     }
   }
@@ -550,9 +584,38 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
     if (!sessionId) log(c.gray('没有找到历史会话，开始新会话'))
   }
   let model = app.model
-  let agent = app.createAgent({ ...(sessionId ? { sessionId } : {}), model })
+  let reasoning: ReasoningOptions = { ...app.resolved.config.agent.reasoning }
+  if (args.thinking !== undefined) {
+    const on = parseSwitch(args.thinking)
+    if (on === undefined) {
+      log(c.red(`--thinking 只能是 on / off，收到 "${args.thinking}"`))
+      await app.dispose()
+      return 2
+    }
+    reasoning = withThinking(reasoning, on)
+  }
+  if (args.effort !== undefined) {
+    const e = parseEffort(args.effort)
+    if (!e) {
+      log(c.red(`--effort 只能是 none / minimal / low / medium / high / xhigh / max，收到 "${args.effort}"`))
+      await app.dispose()
+      return 2
+    }
+    reasoning = args.thinking !== undefined && parseSwitch(args.thinking) === false ? { enabled: false } : withEffort(e)
+  }
+  const llm = app.leo.ctx.get('llm')
+  const infoOf = (m: string) => {
+    try {
+      return llm.resolve(m).info
+    } catch {
+      return undefined
+    }
+  }
+  const newAgent = (sid?: string) => app.createAgent({ ...(sid ? { sessionId: sid } : {}), model, reasoning })
+  let agent = newAgent(sessionId)
+  let choices: ModelChoice[] = []
   const approvalMode = args.yes ? 'auto' : app.resolved.config.tools.approval
-  const footer = () => log(c.gray(`leo ${version()} · ${model} · 会话 ${agent.sessionId} · 审批 ${approvalMode}${!interactive && approvalMode === 'ask' ? '（非交互模式下写文件/执行命令会被拒绝，可加 -y）' : ''}`))
+  const footer = () => log(c.gray(`leo ${version()} · ${model} · ${describeReasoning(reasoning, infoOf(model))} · 会话 ${agent.sessionId} · 审批 ${approvalMode}${!interactive && approvalMode === 'ask' ? '（非交互模式下写文件/执行命令会被拒绝，可加 -y）' : ''}`))
 
   let code = 0
   try {
@@ -587,24 +650,79 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
         if (cmd === 'help') log(HELP.slice(HELP.indexOf('交互模式命令')))
         else if (cmd === 'new') {
           await agent.dispose()
-          agent = app.createAgent({ model })
+          agent = newAgent()
           log(c.gray(`新会话 ${agent.sessionId}`))
         } else if (cmd === 'model') {
-          if (!rest[0]) log(`当前模型：${model}`)
-          else {
-            try {
-              app.leo.ctx.get('llm').resolve(rest[0])
-              const sid = agent.sessionId
-              await agent.dispose()
-              model = rest[0]
-              agent = app.createAgent({ model, sessionId: sid })
-              log(c.gray(`已切换到 ${model}`))
-            } catch (e) {
-              log(c.red((e as Error).message))
+          if (!rest[0]) {
+            const info = infoOf(model)
+            log(`当前模型：${model}${info ? c.gray(`  ${describeModel(info)}`) : ''}`)
+          } else {
+            const n = /^\d+$/.test(rest[0]) ? Number(rest[0]) : undefined
+            if (n !== undefined && !choices.length) choices = (await collectModels(llm)).choices
+            const target = n !== undefined ? choices[n - 1]?.ref : rest[0]
+            if (!target) log(c.red(`没有编号 ${rest[0]} 的模型，输入 /models 查看`))
+            else {
+              try {
+                llm.resolve(target)
+                const sid = agent.sessionId
+                await agent.dispose()
+                model = target
+                agent = newAgent(sid)
+                const info = infoOf(model)
+                log(c.gray(`已切换到 ${model}${info ? `（${describeModel(info)}）` : ''} · ${describeReasoning(reasoning, info)}`))
+              } catch (e) {
+                log(c.red((e as Error).message))
+              }
             }
           }
         } else if (cmd === 'models') {
-          for (const p of app.providers.filter((x) => x.loaded)) log(`  ${p.id}/${p.defaultModel ?? '<model>'}`)
+          const { groups, choices: list } = await collectModels(llm, { refresh: rest[0] !== 'offline' })
+          choices = list
+          let i = 0
+          for (const g of groups) {
+            if (g.error) log(c.yellow(`  ${g.provider.id}：实时获取失败（${g.error}），显示内置列表`))
+            for (const m of g.models) {
+              i++
+              const ref = `${g.provider.id}/${m.id}`
+              log(`  ${String(i).padStart(2)}. ${ref === model ? c.green(ref) : ref}  ${c.gray(describeModel(m))}`)
+            }
+          }
+          if (!i) log(c.gray('  （没有已知模型）'))
+          else log(c.gray('  /model <编号> 切换'))
+        } else if (cmd === 'think' || cmd === 'thinking') {
+          if (!rest[0]) log(`当前：${describeReasoning(reasoning, infoOf(model))} · 思考过程${args.reasoning ? '显示' : '隐藏'}`)
+          else if (rest[0] === 'show' || rest[0] === 'hide') {
+            args.reasoning = rest[0] === 'show'
+            log(c.gray(`思考过程${args.reasoning ? '显示' : '隐藏'}`))
+          } else {
+            const on = parseSwitch(rest[0])
+            if (on === undefined) log(c.red('用法：/think on | off | show | hide'))
+            else {
+              reasoning = withThinking(reasoning, on)
+              const sid = agent.sessionId
+              await agent.dispose()
+              agent = newAgent(sid)
+              log(c.gray(describeReasoning(reasoning, infoOf(model))))
+            }
+          }
+        } else if (cmd === 'effort') {
+          const info = infoOf(model)
+          if (!rest[0]) {
+            const lv = info?.reasoning?.efforts
+            log(`当前：${describeReasoning(reasoning, info)}${lv?.length ? c.gray(`（${model} 支持 none / ${lv.join(' / ')}）`) : ''}`)
+          } else {
+            const e = parseEffort(rest[0])
+            if (!e) log(c.red('用法：/effort none | minimal | low | medium | high | xhigh | max'))
+            else {
+              reasoning = withEffort(e)
+              const sid = agent.sessionId
+              await agent.dispose()
+              agent = newAgent(sid)
+              const lv = info?.reasoning?.efforts
+              const note = e !== 'none' && lv?.length && !lv.includes(e) ? c.yellow(`（${model} 不支持 ${e}，由插件映射到最接近的档位；支持 ${lv.join(' / ')}）`) : ''
+              log(c.gray(describeReasoning(reasoning, info)) + note)
+            }
+          }
         } else if (cmd === 'plugins') {
           if (rest[0] === 'reload') {
             const r = await app.reloadPlugins()
