@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { Interface } from 'node:readline/promises'
-import { createLeoFromConfig, type LeoApp } from '../config/create.js'
+import { createLeoFromConfig, type LeoApp, type PluginNotice } from '../config/create.js'
 import { loadConfig } from '../config/load.js'
 import { maskSecret, readCredentialFile, writeCredential } from '../config/secrets.js'
 import { LeoError } from '../errors.js'
@@ -323,9 +323,13 @@ async function cmdDoctor(cwd: string, args: CliArgs): Promise<number> {
  */
 async function cmdServe(cwd: string, args: CliArgs): Promise<number> {
   let app: LeoApp
+  let started = false
+  const early: PluginNotice[] = []
   try {
     app = await createLeoFromConfig({
       cwd,
+      // 启动阶段的提示先攒着，等打印完标题再输出
+      onNotice: (n) => (started ? log(noticeLine(n)) : early.push(n)),
       overrides: {
         ...(args.model ? { model: args.model } : {}),
         ...(args.yes || args.noTools ? { tools: { ...(args.yes ? { approval: 'auto' as const } : {}), ...(args.noTools ? { builtin: false as const } : {}) } } : {}),
@@ -343,6 +347,8 @@ async function cmdServe(cwd: string, args: CliArgs): Promise<number> {
   app.leo.ctx.on('plugin/loaded', ({ name, reason }) => log(c.gray(`[插件] ${reason === 'added' ? '已加载' : '已重新加载'} ${name}`)))
   app.leo.ctx.on('plugin/unloaded', ({ name }) => log(c.gray(`[插件] 已卸载 ${name}`)))
   app.leo.ctx.on('plugin/failed', ({ spec, error }) => log(c.red(`[插件] 加载失败 ${spec}：${error}`)))
+  for (const n of early.splice(0)) log(noticeLine(n))
+  started = true
   log(c.gray('运行中，Ctrl+C 停止'))
   await new Promise<void>((done) => {
     const stop = () => done()
@@ -352,6 +358,11 @@ async function cmdServe(cwd: string, args: CliArgs): Promise<number> {
   log(c.gray('正在停止…'))
   await app.dispose()
   return 0
+}
+
+function noticeLine(n: PluginNotice, gray = false): string {
+  const text = `[${n.plugin}] ${n.message}`
+  return n.level === 'error' ? c.red(text) : n.level === 'warn' ? c.yellow(text) : gray ? c.gray(text) : text
 }
 
 // —— leo / leo run ——————————————————————————————————————————————————————
@@ -492,6 +503,7 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
   try {
     app = await createLeoFromConfig({
       cwd,
+      ...(interactive ? { onNotice: (n: PluginNotice) => log(noticeLine(n, true)) } : {}),
       overrides: {
         ...(args.model ? { model: args.model } : {}),
         ...(args.yes || args.noTools ? { tools: { ...(args.yes ? { approval: 'auto' as const } : {}), ...(args.noTools ? { builtin: false as const } : {}) } } : {}),

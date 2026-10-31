@@ -420,6 +420,8 @@ const agent = factory?.create({ sessionId: 'chat-123', label: 'gateway:telegram'
 // 传入的选项覆盖默认值，limits 逐项合并；systemPrompt() 返回宿主默认提示词，插件可在其后追加自己的说明
 ```
 
+插件想让用户看到某件事（监听地址、渠道连上了没有）时发 `ctx.emit('plugin/notice', { plugin, message, level? })`：`leo serve` 和交互式 `leo` 会打印成 `[plugin] message`。日志（`ctx.logger`）默认只显示 warn 以上，适合排错，不适合给用户看。
+
 `leo serve` 不提供审批服务：需要人工审批的插件自己提供（网关在聊天里请求 /approve），否则 `ask` 一律拒绝（fail closed）。
 
 ---

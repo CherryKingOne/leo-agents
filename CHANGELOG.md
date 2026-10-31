@@ -4,6 +4,7 @@
 
 - 新增 `agentFactory` 服务：插件按宿主配置（默认模型、系统提示词、步数 / 预算 / 超时）创建 Agent。
 - 新增 `leo serve`：后台常驻，只加载配置与插件并保持在线（网关等插件用它运行），Ctrl+C / SIGTERM 退出。
+- 新增 `plugin/notice` 事件：插件给用户看的一行提示（如网关监听地址、渠道连接状态）。`leo serve` 与交互式 `leo` 打印为 `[插件名] 提示`；嵌入使用时通过 `createLeoFromConfig({ onNotice })` 接收，插件启动阶段发的提示也能收到。
 
 ## 0.1.1 — 2026-10-31
 

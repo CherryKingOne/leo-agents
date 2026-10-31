@@ -189,6 +189,18 @@ describe('createLeoFromConfig', () => {
     expect((await probe.run('hi')).text).toBe('echo:hi')
     await app.dispose()
   })
+
+  it('delivers plugin notices emitted during startup to onNotice', async () => {
+    const { root, home } = await project({ plugins: ['./.leo/plugins/srv.mjs'] })
+    await mkdir(join(root, '.leo', 'plugins'), { recursive: true })
+    await writeFile(join(root, '.leo', 'plugins', 'srv.mjs'), `export default { name: 'srv', apply(ctx) { ctx.emit('plugin/notice', { plugin: 'srv', message: 'listening on http://127.0.0.1:1' }) } }`)
+    const notices: unknown[] = []
+    const app = await createLeoFromConfig({ cwd: root, userDir: home, env: {}, onNotice: (n) => notices.push(n) })
+    expect(notices).toEqual([{ plugin: 'srv', message: 'listening on http://127.0.0.1:1' }])
+    app.leo.ctx.emit('plugin/notice', { plugin: 'srv', message: 'later', level: 'warn' })
+    expect(notices).toHaveLength(2)
+    await app.dispose()
+  })
 })
 
 describe('builtin tools', () => {

@@ -16,6 +16,7 @@ import { LeoError } from '../errors.js'
 import type { PluginLike } from '../kernel/plugin.js'
 import { definePlugin } from '../kernel/plugin.js'
 import type { Logger } from '../kernel/logger.js'
+import type { EventDef } from '../kernel/types.js'
 import { createLeo, type Leo } from '../leo.js'
 import type { Agent, AgentOptions } from '../loop/types.js'
 import { PROVIDER_PRESETS } from '../providers/catalog.js'
@@ -74,6 +75,27 @@ export interface CreateFromConfigOptions extends LoadConfigOptions {
   watchPlugins?: boolean
   /** 热加载的轮询兜底间隔（毫秒），默认 3000，0 关闭；测试里可调小 */
   pluginPollMs?: number
+  /**
+   * 接收插件发给用户看的提示（`plugin/notice` 事件），比如网关监听的地址、渠道连上了没有。
+   * 在所有插件之前订阅，所以插件启动时发的提示也能收到。CLI 用它把提示打印出来
+   */
+  onNotice?: (notice: PluginNotice) => void
+}
+
+/** 插件给用户看的一行提示。和 logger 不同：logger 给运维/排错，notice 是 CLI 会直接显示的人话 */
+export interface PluginNotice {
+  /** 插件名，CLI 显示为 [plugin] 前缀 */
+  plugin: string
+  message: string
+  /** 默认 info */
+  level?: 'info' | 'warn' | 'error'
+}
+
+declare module '../kernel/types.js' {
+  interface Events {
+    /** 插件给用户的提示，宿主决定怎么显示（leo serve / 交互模式打印一行；嵌入式使用可通过 onNotice 接收） */
+    'plugin/notice': EventDef<'emit', PluginNotice>
+  }
 }
 
 export interface ProviderStatus {
@@ -330,6 +352,8 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
     : undefined
   const tools = config.tools
   const plugins: (PluginLike | [PluginLike, unknown])[] = [
+    // 最先订阅 plugin/notice，后面插件启动时发的提示也能收到
+    ...(opts.onNotice ? [definePlugin({ name: 'leo:notice', apply: (ctx) => void ctx.on('plugin/notice', (n) => opts.onNotice!(n)) })] : []),
     definePlugin({ name: 'leo:paths', apply: (ctx) => void ctx.provide('leoPaths', Object.freeze({ ...paths })) }),
     definePlugin({ name: 'leo:credentials', apply: (ctx) => void ctx.provide('credentials', credentials) }),
     agentFactoryPlugin,
