@@ -18,6 +18,7 @@ chmod +x dist/cli/main.js        # 命令授权
 leo auth set deepseek            # 保存密钥到 ~/.leo/credentials.json（或 export DEEPSEEK_API_KEY=...）
 cd your-project && leo           # 交互式 Agent：读写文件、搜索、执行命令、抓网页（写入/执行前会询问）
 leo -p -y "跑测试，失败就修"       # 一次性执行
+leo serve                        # 后台常驻：只加载插件并保持在线（如 leo plugin add gateway 后接入 Telegram / 飞书 / QQ）
 leo init                         # 在项目里创建 .leo/config.json，配置模型、插件、工具、预算
 leo plugin add mcp               # 全局安装插件，自动生成它的配置文件，运行中的 leo 立即热加载（--project 只装到当前项目；leo plugin remove mcp 默认卸载全局，--project 卸项目，--all 都卸）
 ```

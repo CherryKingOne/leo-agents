@@ -56,6 +56,7 @@ leo -c                              # 继续上次会话
 | `leo auth list` / `leo auth remove <provider>` | 查看（掩码）/ 删除密钥 |
 | `leo models` | 可用的提供方、默认模型、密钥来源 |
 | `leo doctor` | 诊断：读到了哪些配置文件、密钥从哪来、加载了哪些插件和工具 |
+| `leo serve [-y]` | 后台常驻：不进入对话，只加载配置与插件并保持在线（热加载照常），Ctrl+C 停止。给网关、渠道机器人这类“自己接活”的插件用，例如 `leo plugin add gateway && leo serve` |
 
 内置工具：`read_file`、`write_file`、`edit_file`、`list_dir`、`grep`、`bash`、`web_fetch`。
 写文件和执行命令默认需要确认（`[y]是 / [n]否 / [a]本次会话都允许`）；非交互模式下没有人能确认，默认拒绝，加 `-y` 放行。
@@ -408,6 +409,18 @@ leo plugin remove mcp --purge              # 连同安装时生成的配置文�
 
 通过 `createLeoFromConfig`（含 CLI）启动时，最先提供 `leoPaths` 服务：`{ cwd, projectRoot?, projectDir?, userDir, ... }`。
 插件用 `ctx.maybe('leoPaths')` 读取（用 `createLeo` 手动组装时没有这个服务，插件应能在缺失时正常工作）。
+
+同时提供 `agentFactory` 服务：按 `.leo/config.json` 的默认值（模型、系统提示词、步数 / 预算 / 超时）创建 Agent。
+需要自己起 Agent 的插件（网关、定时任务、Webhook 机器人）用它，而不是自己拼模型与提示词：
+
+```ts
+const factory = ctx.maybe('agentFactory')          // 手动 createLeo 组装时没有，插件要能降级
+factory?.defaultModel                              // 'deepseek/deepseek-chat' | undefined
+const agent = factory?.create({ sessionId: 'chat-123', label: 'gateway:telegram', limits: { maxSteps: 20 } })
+// 传入的选项覆盖默认值，limits 逐项合并；systemPrompt() 返回宿主默认提示词，插件可在其后追加自己的说明
+```
+
+`leo serve` 不提供审批服务：需要人工审批的插件自己提供（网关在聊天里请求 /approve），否则 `ask` 一律拒绝（fail closed）。
 
 ---
 
