@@ -396,7 +396,7 @@ leo plugin remove mcp --purge              # 连同安装时生成的配置文�
   npm 安装的包读取包内 `leo-plugin.json` 的 `init.files[].template`。`--init` 仍可写，等同默认。
 - **卸载**：默认卸载全局，`--project` 卸载项目，`--all` 两处都卸。只卸一处时，如果另一处还装着会提示：卸掉全局后项目里的那份仍在该项目生效；卸掉项目那份后该项目改用全局的。
   会删除 `plugins/` 里的单文件、`config.json` 里的包名，并 `npm uninstall` 包。配置文件默认保留，`--purge` 才删除插件声明的 `init.files`。
-- **不用重启**：正在运行的 `leo`会自动感知安装、移除和更新并热加载（通常不到一秒，最多约 3 秒），见 4.9。
+- **不用重启**：正在运行的 `leo`（对话、`leo api`）会自动感知安装、移除和更新并热加载（通常不到一秒，最多约 3 秒），见 4.9。
 - 插件仓库默认是官方仓库 `https://raw.githubusercontent.com/CherryKingOne/leo-plugin/main/registry.json`，
   可用 `--registry <url|路径>` 或环境变量 `LEO_PLUGIN_REGISTRY` 指向镜像或私有仓库。
 - 仓库条目格式见 leo-plugin 仓库的 `schemas/registry.schema.json`；`bundle.url`、`init.files[].url` 可写相对地址（相对仓库文件）。
@@ -413,7 +413,7 @@ leo plugin remove mcp --purge              # 连同安装时生成的配置文�
 
 ### 4.9 插件热加载
 
-通过 `createLeoFromConfig` 启动（含 `leo` 对话）时，插件是**热加载**的：运行中安装、移除、更新插件，或修改插件的数据文件，不需要重启。
+通过 `createLeoFromConfig` 启动（含 `leo` 对话和 `leo api`）时，插件是**热加载**的：运行中安装、移除、更新插件，或修改插件的数据文件，不需要重启。
 
 **监听什么**（`fs.watch` + 每 3 秒一次轮询兜底，都不会让进程常驻）：
 

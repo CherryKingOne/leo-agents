@@ -27,9 +27,13 @@ export interface CliArgs {
   all: boolean
   /** plugin remove：连同初始化的配置文件一起删除 */
   purge: boolean
+  host?: string
+  port?: number
+  token?: string
+  python?: string
 }
 
-const COMMANDS = new Set(['run', 'chat', 'init', 'auth', 'models', 'doctor', 'plugin', 'plugins', 'help', 'version'])
+const COMMANDS = new Set(['run', 'chat', 'init', 'auth', 'models', 'doctor', 'plugin', 'plugins', 'api', 'help', 'version'])
 
 export function parseArgs(argv: string[]): CliArgs {
   const a: CliArgs = { positionals: [], print: false, yes: false, continue: false, json: false, noTools: false, project: false, reasoning: false, help: false, version: false, global: false, npm: false, noInit: false, force: false, all: false, purge: false }
@@ -64,6 +68,10 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--force': a.force = true; break
       case '--all': a.all = true; break
       case '--purge': a.purge = true; break
+      case '--host': a.host = val(); break
+      case '--port': a.port = Number(val()); break
+      case '--token': a.token = val(); break
+      case '--python': a.python = val(); break
       case '-h': case '--help': a.help = true; break
       case '-v': case '--version': a.version = true; break
       case '--': rest.push(...argv.slice(i + 1)); i = argv.length; break
@@ -101,6 +109,8 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
   leo plugin remove <id> [--project | --all] [--purge]
                               卸载插件（别名 rm / uninstall）。默认卸载全局安装；--project（--local / -l）卸载当前项目的；
                               --all 两处都卸载；--purge 连同安装时生成的配置文件一起删除（默认保留）
+  leo api [--host 127.0.0.1] [--port 8765] [--token <t>]
+                              以 HTTP API 服务方式启动（Python 服务 + 常驻 leo，插件一直在线），不进入对话
 
 选项
   -m, --model <p/m>           指定模型，如 deepseek/deepseek-chat
@@ -115,6 +125,9 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
       --cwd <dir>             工作目录
       --registry <url|path>   插件仓库地址（默认官方仓库，也可用 LEO_PLUGIN_REGISTRY）
   -l, --project, --local      leo plugin / leo auth 作用于当前项目的 .leo/（默认 ~/.leo）
+      --host / --port         leo api 监听地址（默认 127.0.0.1:8765，也可用 LEO_API_HOST / LEO_API_PORT）
+      --token <t>             leo api 访问令牌（也可用 LEO_API_TOKEN）；监听非本机地址时建议设置
+      --python <ver|bin>      leo api 的 Python（默认由 uv 管理 3.12；也可 LEO_UV 指定 uv）
   -h, --help / -v, --version
 
 内置提供方：deepseek, openai, qwen, moonshot, zhipu, siliconflow, openrouter, ollama
