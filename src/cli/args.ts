@@ -38,7 +38,7 @@ export interface CliArgs {
 const COMMANDS = new Set(['run', 'chat', 'init', 'auth', 'models', 'doctor', 'plugin', 'plugins', 'serve', 'help', 'version'])
 
 export function parseArgs(argv: string[]): CliArgs {
-  const a: CliArgs = { positionals: [], print: false, yes: false, continue: false, json: false, noTools: false, project: false, reasoning: false, help: false, version: false, global: false, npm: false, noInit: false, force: false, all: false, purge: false }
+  const a: CliArgs = { positionals: [], print: false, yes: false, continue: false, json: false, noTools: false, project: false, reasoning: true, help: false, version: false, global: false, npm: false, noInit: false, force: false, all: false, purge: false }
   const rest: string[] = []
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i]!
@@ -59,7 +59,8 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--json': a.json = true; break
       case '--no-tools': a.noTools = true; break
       case '--project': case '--local': case '-l': a.project = true; break
-      case '--reasoning': a.reasoning = true; break
+      case '--reasoning': case '--show-thinking': a.reasoning = true; break
+      case '--no-reasoning': case '--hide-thinking': a.reasoning = false; break
       case '--thinking': case '--think': a.thinking = val(); break
       case '--no-thinking': a.thinking = 'off'; break
       case '--effort': case '--reasoning-effort': a.effort = val(); break
@@ -123,7 +124,7 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
       --api-key <key>         本次运行使用的密钥（配合 --provider，默认作用于默认模型的提供方）
       --no-tools              不启用内置工具
       --json                  以 JSONL 输出事件流
-      --reasoning             显示模型的思考过程
+      --hide-thinking         不显示模型的思考过程（默认以灰色显示在 stderr；--no-reasoning 同义）
       --thinking <on|off>     开启 / 关闭思考模式（--no-thinking 同 off；不写由模型决定，多数默认开启）
       --effort <level>        推理强度：none / minimal / low / medium / high / xhigh / max
                               （每个模型支持的档位见 leo models，不支持的档位由插件映射到最接近的一档；none 即关闭思考）
@@ -139,6 +140,6 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
 交互模式命令：
   /models                     列出全部模型（编号）及详情
   /model [<p/m> | <编号>]     查看或切换模型
-  /think [on|off]             查看或切换思考模式
+  /think [on|off|show|hide]   查看或切换思考模式；show / hide 显示或隐藏思考过程
   /effort [<level>]           查看或设置推理强度
   /new /plugins [reload] /session /help /exit`

@@ -4,6 +4,9 @@
 
 > 在 `feat/provider-plugin` 分支开发，未合并到 main、未打标签。配合 leo-plugin 的 `provider` / `provider-deepseek` 0.2.0 使用（插件也兼容 0.2.0 底座，只是没有下面这些能力）。
 
+- 思考过程默认显示（灰色 💭，写到 stderr，不影响 `-p` 的 stdout 输出）；`--hide-thinking` / `--no-reasoning` 或交互 `/think hide` 隐藏，`/think show` 恢复。原 `--reasoning` 保留为兼容写法
+- 每轮统计显示思考 token 数，例如 `30↓（思考 20） tokens`
+
 **真实模型列表、思考模式与推理强度。**
 
 - `ModelInfo` 新增 `name`（展示名）、`inputModalities` / `outputModalities`、`reasoning`（是否支持思考、能否关闭、默认开关、可用强度档位与默认档位）、`ownedBy`、`alias`、`source`

@@ -428,20 +428,28 @@ function render(ev: AgentEvent, args: CliArgs, state: { midLine: boolean; reason
   switch (ev.type) {
     case 'reasoning_delta':
       if (args.reasoning) {
-        if (!state.reasoning) err.write(c.gray('思考：'))
+        if (!state.reasoning) {
+          if (state.midLine) out.write('\n')
+          state.midLine = false
+          err.write(c.gray('💭 '))
+        }
         state.reasoning = true
         err.write(c.gray(ev.text))
       }
       break
     case 'text_delta':
       if (state.reasoning) {
-        err.write('\n')
+        err.write('\n\n')
         state.reasoning = false
       }
       out.write(ev.text)
       state.midLine = !ev.text.endsWith('\n')
       break
     case 'tool_start': {
+      if (state.reasoning) {
+        err.write('\n')
+        state.reasoning = false
+      }
       ensureNewline()
       const a = ev.call.arguments as Record<string, unknown> | undefined
       const preview = a ? (typeof a.command === 'string' ? a.command : typeof a.path === 'string' ? a.path : typeof a.url === 'string' ? a.url : typeof a.pattern === 'string' ? a.pattern : JSON.stringify(a)) : ''
@@ -470,11 +478,15 @@ function render(ev: AgentEvent, args: CliArgs, state: { midLine: boolean; reason
       log(c.gray(`（上下文已压缩：${ev.strategy}）`))
       break
     case 'turn_end': {
+      if (state.reasoning) {
+        err.write('\n')
+        state.reasoning = false
+      }
       ensureNewline()
       const u = ev.usage
       const cost = u.costUsd ? ` · $${u.costUsd.toFixed(4)}` : ''
       if (ev.reason !== 'completed') log(c.yellow(`[${ev.reason}]${ev.error ? ` ${ev.error.message}` : ''}`))
-      log(c.gray(`${ev.steps} 步 · ${u.inputTokens}↑ ${u.outputTokens}↓ tokens${cost}`))
+      log(c.gray(`${ev.steps} 步 · ${u.inputTokens}↑ ${u.outputTokens}↓${u.reasoningTokens ? `（思考 ${u.reasoningTokens}）` : ''} tokens${cost}`))
       break
     }
   }
@@ -678,10 +690,13 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
           if (!i) log(c.gray('  （没有已知模型）'))
           else log(c.gray('  /model <编号> 切换'))
         } else if (cmd === 'think' || cmd === 'thinking') {
-          if (!rest[0]) log(`当前：${describeReasoning(reasoning, infoOf(model))}`)
-          else {
+          if (!rest[0]) log(`当前：${describeReasoning(reasoning, infoOf(model))} · 思考过程${args.reasoning ? '显示' : '隐藏'}`)
+          else if (rest[0] === 'show' || rest[0] === 'hide') {
+            args.reasoning = rest[0] === 'show'
+            log(c.gray(`思考过程${args.reasoning ? '显示' : '隐藏'}`))
+          } else {
             const on = parseSwitch(rest[0])
-            if (on === undefined) log(c.red('用法：/think on | off'))
+            if (on === undefined) log(c.red('用法：/think on | off | show | hide'))
             else {
               reasoning = withThinking(reasoning, on)
               const sid = agent.sessionId
