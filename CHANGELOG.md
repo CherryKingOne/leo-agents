@@ -4,6 +4,9 @@
 
 > 需要配合 leo-plugin 的 `provider` 与 `provider-deepseek` 插件（0.2.0）使用。
 
+- 交互中 `/model`、`/think`、`/effort` 切换后发出 `llm/selected` 事件（`{ model, reasoning, changed }`），插件可据此持久化（leo-plugin-provider 0.3.0 写回 provider.json）；命令行参数不发
+- 新事件 `plugin/data-written`：插件写自己 `watch` 的数据文件后发出，宿主更新指纹，不因此重新加载该插件
+
 **破坏性变更：模型供应商插件化，底座不再内置任何模型厂商。**
 
 - 移除 `PROVIDER_PRESETS`（DeepSeek / OpenAI / 通义 / Kimi / 智谱 / SiliconFlow / OpenRouter / Ollama 预设）、`OpenAICompatibleProvider`、`parseSSE`、`providerKinds` 服务、`openaiCompatible()` / `deepseek()` 等辅助函数，以及按密钥自动探测厂商。它们移到 leo-plugin 的 `provider`（注册层，自带通用 OpenAI 兼容协议）与 `provider-deepseek`（DeepSeek 子插件）

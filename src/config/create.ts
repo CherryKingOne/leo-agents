@@ -21,6 +21,7 @@ import { definePlugin } from '../kernel/plugin.js'
 import type { Logger } from '../kernel/logger.js'
 import type { EventDef } from '../kernel/types.js'
 import { createLeo, type Leo } from '../leo.js'
+import type { ReasoningOptions } from '../llm/types.js'
 import type { Agent, AgentOptions } from '../loop/types.js'
 import { approvalPolicy, builtinToolsPlugin } from '../tools/builtin.js'
 import type { ApprovalService } from '../tools/types.js'
@@ -103,7 +104,25 @@ declare module '../kernel/types.js' {
   interface Events {
     /** 插件给用户的提示，宿主决定怎么显示（leo serve / 交互模式打印一行；嵌入式使用可通过 onNotice 接收） */
     'plugin/notice': EventDef<'emit', PluginNotice>
+    /**
+     * 插件自己改写了它 `watch` 的数据文件（如 provider 把 /model 的选择写回 provider.json）：
+     * 宿主据此更新指纹，不因为这次写入重新加载该插件。plugin 为插件名（definePlugin 的 name）
+     */
+    'plugin/data-written': EventDef<'emit', { plugin: string }>
+    /**
+     * 交互中用户切换了模型或思考设置（/model、/think on|off、/effort）。插件可以据此持久化，
+     * 例如 provider 写回 provider.json，下次启动沿用。命令行参数（-m、--effort）只作用于本次，不发此事件
+     */
+    'llm/selected': EventDef<'emit', LlmSelection>
   }
+}
+
+/** `llm/selected` 事件：当前选择的完整状态 + 这次改了什么 */
+export interface LlmSelection {
+  /** `<provider>/<model>` */
+  model: string
+  reasoning: ReasoningOptions
+  changed: 'model' | 'thinking' | 'effort'
 }
 
 /** 已注册到 `llm` 服务的模型提供方（`leo models` / `leo doctor` 展示） */
@@ -357,6 +376,8 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
   const plugins: (PluginLike | [PluginLike, unknown])[] = [
     // 最先订阅 plugin/notice，后面插件启动时发的提示也能收到
     ...(opts.onNotice ? [definePlugin({ name: 'leo:notice', apply: (ctx) => void ctx.on('plugin/notice', (n) => opts.onNotice!(n)) })] : []),
+    // 插件写回自己的数据文件时不触发热加载
+    definePlugin({ name: 'leo:data-written', apply: (ctx) => void ctx.on('plugin/data-written', ({ plugin }) => reloader.acknowledge(plugin)) }),
     definePlugin({ name: 'leo:paths', apply: (ctx) => void ctx.provide('leoPaths', Object.freeze({ ...paths })) }),
     definePlugin({ name: 'leo:credentials', apply: (ctx) => void ctx.provide('credentials', credentials) }),
     definePlugin({ name: 'leo:config', apply: (ctx) => void ctx.provide('leoConfig', Object.freeze({ ...config })) }),

@@ -165,6 +165,17 @@ export class PluginHotReloader {
     return parts.join('|')
   }
 
+  /**
+   * 插件自己写了它 watch 的数据文件：重新记录指纹，这次变化不再触发重新加载（与 reload 串行，不会和进行中的加载打架）
+   */
+  acknowledge(pluginName: string): Promise<void> {
+    const run = this.chain.then(async () => {
+      for (const slot of this.slots.values()) if (slot.name === pluginName) slot.dataStamp = await this.dataStamp(slot)
+    })
+    this.chain = run.catch(() => undefined)
+    return run
+  }
+
   /** 合并短时间内的多次变化后重新加载（已有待执行的就不再推迟，避免持续写入时一直不生效） */
   schedule() {
     if (this.closed || this.timer) return
