@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { Interface } from 'node:readline/promises'
-import { createLeoFromConfig, type LeoApp } from '../config/create.js'
+import { createLeoFromConfig, type LeoApp, type PluginNotice } from '../config/create.js'
 import { loadConfig } from '../config/load.js'
 import { maskSecret, readCredentialFile, writeCredential } from '../config/secrets.js'
 import { LeoError } from '../errors.js'
@@ -56,6 +56,8 @@ async function main(argv: string[]): Promise<number> {
     case 'plugin':
     case 'plugins':
       return cmdPlugin(cwd, args)
+    case 'serve':
+      return cmdServe(cwd, args)
     default:
       return cmdRun(cwd, args)
   }
@@ -313,6 +315,56 @@ async function cmdDoctor(cwd: string, args: CliArgs): Promise<number> {
   return app.model ? 0 : 1
 }
 
+// —— leo serve ——————————————————————————————————————————————————————————————
+/**
+ * 后台常驻：只加载配置与插件，不创建对话 Agent，直到 Ctrl+C / SIGTERM。
+ * 插件在线（热加载照常生效），由插件自己决定做什么——例如 leo-plugin-gateway 接入聊天平台并替用户起 Agent。
+ * 这里不提供 approval 服务：需要人工审批的插件（如网关）自己提供，否则 ask 一律拒绝（fail closed）。
+ */
+async function cmdServe(cwd: string, args: CliArgs): Promise<number> {
+  let app: LeoApp
+  let started = false
+  const early: PluginNotice[] = []
+  try {
+    app = await createLeoFromConfig({
+      cwd,
+      // 启动阶段的提示先攒着，等打印完标题再输出
+      onNotice: (n) => (started ? log(noticeLine(n)) : early.push(n)),
+      overrides: {
+        ...(args.model ? { model: args.model } : {}),
+        ...(args.yes || args.noTools ? { tools: { ...(args.yes ? { approval: 'auto' as const } : {}), ...(args.noTools ? { builtin: false as const } : {}) } } : {}),
+      },
+    })
+  } catch (e) {
+    log(c.red(`✗ ${(e as Error).message}`))
+    return 1
+  }
+  const plugins = app.loadedPlugins()
+  const approval = args.yes ? 'auto' : app.resolved.config.tools.approval
+  log(c.gray(`leo ${version()} · serve · ${app.model ?? '(无默认模型)'} · 审批 ${approval}`))
+  log(plugins.length ? `插件：${plugins.map((p) => p.name).join(', ')}` : c.yellow('没有加载任何插件：leo serve 只是让插件常驻，先用 leo plugin add <id> 安装，例如 leo plugin add gateway'))
+  if (!app.model) log(c.yellow('还没有可用的模型：插件创建 Agent 时会失败。运行 leo auth set <provider> 配置密钥'))
+  app.leo.ctx.on('plugin/loaded', ({ name, reason }) => log(c.gray(`[插件] ${reason === 'added' ? '已加载' : '已重新加载'} ${name}`)))
+  app.leo.ctx.on('plugin/unloaded', ({ name }) => log(c.gray(`[插件] 已卸载 ${name}`)))
+  app.leo.ctx.on('plugin/failed', ({ spec, error }) => log(c.red(`[插件] 加载失败 ${spec}：${error}`)))
+  for (const n of early.splice(0)) log(noticeLine(n))
+  started = true
+  log(c.gray('运行中，Ctrl+C 停止'))
+  await new Promise<void>((done) => {
+    const stop = () => done()
+    process.once('SIGINT', stop)
+    process.once('SIGTERM', stop)
+  })
+  log(c.gray('正在停止…'))
+  await app.dispose()
+  return 0
+}
+
+function noticeLine(n: PluginNotice, gray = false): string {
+  const text = `[${n.plugin}] ${n.message}`
+  return n.level === 'error' ? c.red(text) : n.level === 'warn' ? c.yellow(text) : gray ? c.gray(text) : text
+}
+
 // —— leo / leo run ——————————————————————————————————————————————————————
 async function latestSession(dir: string): Promise<string | undefined> {
   try {
@@ -451,6 +503,7 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
   try {
     app = await createLeoFromConfig({
       cwd,
+      ...(interactive ? { onNotice: (n: PluginNotice) => log(noticeLine(n, true)) } : {}),
       overrides: {
         ...(args.model ? { model: args.model } : {}),
         ...(args.yes || args.noTools ? { tools: { ...(args.yes ? { approval: 'auto' as const } : {}), ...(args.noTools ? { builtin: false as const } : {}) } } : {}),

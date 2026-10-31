@@ -29,7 +29,7 @@ export interface CliArgs {
   purge: boolean
 }
 
-const COMMANDS = new Set(['run', 'chat', 'init', 'auth', 'models', 'doctor', 'plugin', 'plugins', 'help', 'version'])
+const COMMANDS = new Set(['run', 'chat', 'init', 'auth', 'models', 'doctor', 'plugin', 'plugins', 'serve', 'help', 'version'])
 
 export function parseArgs(argv: string[]): CliArgs {
   const a: CliArgs = { positionals: [], print: false, yes: false, continue: false, json: false, noTools: false, project: false, reasoning: false, help: false, version: false, global: false, npm: false, noInit: false, force: false, all: false, purge: false }
@@ -91,6 +91,7 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
   leo auth list | remove <provider>
   leo models                  查看可用的提供方与默认模型
   leo doctor                  诊断：配置文件、密钥来源、插件、会话目录
+  leo serve                   后台常驻：不进入对话，只加载配置与插件并保持在线（网关、渠道机器人等插件用它运行），Ctrl+C 停止
   leo plugin list             查看已安装的插件（全局 / 当前项目）与官方插件仓库
   leo plugin add <id> [--project] [--no-init | --init-from <path>] [--npm]
                               安装插件。默认全局安装到 ~/.leo（所有项目可用）；--project 装到当前项目 .leo/。

@@ -163,6 +163,44 @@ describe('createLeoFromConfig', () => {
     expect(app.resolved.plugins).toHaveLength(1) // 显式声明与目录发现去重
     await app.dispose()
   })
+
+  it('provides agentFactory so plugins create agents with the host defaults', async () => {
+    const { root, home } = await project({ model: 'e/x', providers: { e: { type: 'echo' } }, agent: { systemPrompt: 'HOST PROMPT', maxSteps: 7 }, plugins: ['./.leo/plugins/bot.mjs'] })
+    await mkdir(join(root, '.leo', 'plugins'), { recursive: true })
+    await writeFile(
+      join(root, '.leo', 'plugins', 'bot.mjs'),
+      `export default { name: 'bot', inject: ['providerKinds'], async apply(ctx) {
+        await ctx.effect(() => ctx.get('providerKinds').register('echo', ({ id }) => ({ id, async *stream(req) {
+          yield { type: 'text_delta', text: 'echo:' + req.messages.at(-1).content[0].text }
+          yield { type: 'done', finishReason: 'stop' }
+        } })))
+        ctx.provide('botProbe', { run: (text) => ctx.get('agentFactory').create({ tools: false, label: 'bot' }).run(text), factory: () => ctx.get('agentFactory') })
+      } }`,
+    )
+    const app = await createLeoFromConfig({ cwd: root, userDir: home, env: {} })
+    const probe = app.leo.ctx.get('botProbe' as never) as { run(t: string): Promise<{ text: string }>; factory(): { defaultModel?: string; systemPrompt(): string; create(o: object): { options: { model: string; systemPrompt?: string; limits?: { maxSteps?: number }; label?: string } } } }
+    const f = probe.factory()
+    expect(f.defaultModel).toBe('e/x')
+    expect(f.systemPrompt()).toContain('HOST PROMPT')
+    const agent = f.create({ label: 'x', limits: { turnTimeoutMs: 5 } })
+    expect(agent.options.model).toBe('e/x')
+    expect(agent.options.systemPrompt).toContain('HOST PROMPT')
+    expect(agent.options.limits).toMatchObject({ maxSteps: 7, turnTimeoutMs: 5 })
+    expect((await probe.run('hi')).text).toBe('echo:hi')
+    await app.dispose()
+  })
+
+  it('delivers plugin notices emitted during startup to onNotice', async () => {
+    const { root, home } = await project({ plugins: ['./.leo/plugins/srv.mjs'] })
+    await mkdir(join(root, '.leo', 'plugins'), { recursive: true })
+    await writeFile(join(root, '.leo', 'plugins', 'srv.mjs'), `export default { name: 'srv', apply(ctx) { ctx.emit('plugin/notice', { plugin: 'srv', message: 'listening on http://127.0.0.1:1' }) } }`)
+    const notices: unknown[] = []
+    const app = await createLeoFromConfig({ cwd: root, userDir: home, env: {}, onNotice: (n) => notices.push(n) })
+    expect(notices).toEqual([{ plugin: 'srv', message: 'listening on http://127.0.0.1:1' }])
+    app.leo.ctx.emit('plugin/notice', { plugin: 'srv', message: 'later', level: 'warn' })
+    expect(notices).toHaveLength(2)
+    await app.dispose()
+  })
 })
 
 describe('builtin tools', () => {

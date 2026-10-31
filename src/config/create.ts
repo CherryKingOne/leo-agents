@@ -16,6 +16,7 @@ import { LeoError } from '../errors.js'
 import type { PluginLike } from '../kernel/plugin.js'
 import { definePlugin } from '../kernel/plugin.js'
 import type { Logger } from '../kernel/logger.js'
+import type { EventDef } from '../kernel/types.js'
 import { createLeo, type Leo } from '../leo.js'
 import type { Agent, AgentOptions } from '../loop/types.js'
 import { PROVIDER_PRESETS } from '../providers/catalog.js'
@@ -31,7 +32,25 @@ declare module '../kernel/types.js' {
   interface Services {
     /** 由 createLeoFromConfig 提供：当前目录、项目根、项目 .leo 目录、用户 ~/.leo 目录。插件用 ctx.maybe('leoPaths') 读取 */
     leoPaths: Readonly<LeoPaths>
+    /**
+     * 由 createLeoFromConfig 提供：按 `.leo/config.json` 的默认值（模型、系统提示词、步数 / 预算 / 超时）创建 Agent。
+     * 需要“自己起 Agent”的插件（网关、定时任务、Webhook 机器人……）用它，而不是自己拼模型和提示词：
+     *
+     *   const factory = ctx.maybe('agentFactory')
+     *   const agent = factory?.create({ sessionId, label: 'gateway:telegram' })
+     */
+    agentFactory: AgentFactory
   }
+}
+
+/** 按宿主配置创建 Agent 的服务（见 `Services.agentFactory`） */
+export interface AgentFactory {
+  /** 默认模型（`provider/model`）；没有可用提供方时为 undefined，此时 create() 会抛 auth 错误 */
+  readonly defaultModel?: string
+  /** 宿主的默认系统提示词（含工作目录、日期），插件可在其后追加自己的说明 */
+  systemPrompt(): string
+  /** 以宿主默认值创建 Agent，传入的选项覆盖默认值（limits 逐项合并） */
+  create(opts?: Partial<AgentOptions>): Agent
 }
 
 export const DEFAULT_SYSTEM_PROMPT = `You are Leo, a capable general-purpose AI agent. You complete tasks by reasoning step by step and using the tools available to you (files, shell, web) instead of guessing.
@@ -56,6 +75,27 @@ export interface CreateFromConfigOptions extends LoadConfigOptions {
   watchPlugins?: boolean
   /** 热加载的轮询兜底间隔（毫秒），默认 3000，0 关闭；测试里可调小 */
   pluginPollMs?: number
+  /**
+   * 接收插件发给用户看的提示（`plugin/notice` 事件），比如网关监听的地址、渠道连上了没有。
+   * 在所有插件之前订阅，所以插件启动时发的提示也能收到。CLI 用它把提示打印出来
+   */
+  onNotice?: (notice: PluginNotice) => void
+}
+
+/** 插件给用户看的一行提示。和 logger 不同：logger 给运维/排错，notice 是 CLI 会直接显示的人话 */
+export interface PluginNotice {
+  /** 插件名，CLI 显示为 [plugin] 前缀 */
+  plugin: string
+  message: string
+  /** 默认 info */
+  level?: 'info' | 'warn' | 'error'
+}
+
+declare module '../kernel/types.js' {
+  interface Events {
+    /** 插件给用户的提示，宿主决定怎么显示（leo serve / 交互模式打印一行；嵌入式使用可通过 onNotice 接收） */
+    'plugin/notice': EventDef<'emit', PluginNotice>
+  }
 }
 
 export interface ProviderStatus {
@@ -269,6 +309,42 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
     apply: (ctx) => reloader.loadInitial(ctx, resolved.plugins),
   })
 
+  const a = config.agent
+  const basePrompt = [a.systemPrompt ?? DEFAULT_SYSTEM_PROMPT, a.appendSystemPrompt].filter(Boolean).join('\n\n')
+  const workspace = config.tools.workspace ? resolve(base, config.tools.workspace) : paths.cwd
+  const fullPrompt = () => `${basePrompt}\n\nWorking directory: ${workspace}\nToday: ${new Date().toISOString().slice(0, 10)}`
+  /** 宿主默认值 + 覆盖项 → AgentOptions（createAgent 与 agentFactory 共用） */
+  const agentOptions = (o: Partial<AgentOptions> = {}): AgentOptions => {
+    const m = o.model ?? model
+    if (!m) {
+      throw new LeoError('auth', 'No model available. Configure a provider key: `leo auth set deepseek` (or export DEEPSEEK_API_KEY), or set "model" in .leo/config.json.')
+    }
+    const limits = {
+      ...(a.maxSteps ? { maxSteps: a.maxSteps } : {}),
+      ...(a.maxTurnTokens ? { maxTurnTokens: a.maxTurnTokens } : {}),
+      ...(a.maxTurnCostUsd ? { maxTurnCostUsd: a.maxTurnCostUsd } : {}),
+      ...(a.turnTimeoutMs ? { turnTimeoutMs: a.turnTimeoutMs } : {}),
+      ...o.limits,
+    }
+    return {
+      systemPrompt: fullPrompt(),
+      ...(a.maxOutputTokens ? { maxOutputTokens: a.maxOutputTokens } : {}),
+      ...(a.temperature !== undefined ? { temperature: a.temperature } : {}),
+      ...o,
+      model: m,
+      limits,
+    }
+  }
+  const agentFactoryPlugin = definePlugin({
+    name: 'leo:agent-factory',
+    apply: (ctx) =>
+      void ctx.provide('agentFactory', {
+        ...(model ? { defaultModel: model } : {}),
+        systemPrompt: fullPrompt,
+        create: (o) => ctx.get('agentLoop').create(agentOptions(o)),
+      }),
+  })
+
   const sessionsDir = config.sessions.persist
     ? config.sessions.dir
       ? resolve(base, config.sessions.dir)
@@ -276,8 +352,11 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
     : undefined
   const tools = config.tools
   const plugins: (PluginLike | [PluginLike, unknown])[] = [
+    // 最先订阅 plugin/notice，后面插件启动时发的提示也能收到
+    ...(opts.onNotice ? [definePlugin({ name: 'leo:notice', apply: (ctx) => void ctx.on('plugin/notice', (n) => opts.onNotice!(n)) })] : []),
     definePlugin({ name: 'leo:paths', apply: (ctx) => void ctx.provide('leoPaths', Object.freeze({ ...paths })) }),
     definePlugin({ name: 'leo:credentials', apply: (ctx) => void ctx.provide('credentials', credentials) }),
+    agentFactoryPlugin,
     providerKindsPlugin,
     userPluginSlot,
     configured,
@@ -322,35 +401,13 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
     opts.watchPlugins !== false,
   )
 
-  const a = config.agent
-  const systemPrompt = [a.systemPrompt ?? DEFAULT_SYSTEM_PROMPT, a.appendSystemPrompt].filter(Boolean).join('\n\n')
   return {
     leo,
     resolved,
     ...(model ? { model } : {}),
     providers: statuses,
     credentials,
-    createAgent(o = {}) {
-      const m = o.model ?? model
-      if (!m) {
-        throw new LeoError('auth', 'No model available. Configure a provider key: `leo auth set deepseek` (or export DEEPSEEK_API_KEY), or set "model" in .leo/config.json.')
-      }
-      const limits = {
-        ...(a.maxSteps ? { maxSteps: a.maxSteps } : {}),
-        ...(a.maxTurnTokens ? { maxTurnTokens: a.maxTurnTokens } : {}),
-        ...(a.maxTurnCostUsd ? { maxTurnCostUsd: a.maxTurnCostUsd } : {}),
-        ...(a.turnTimeoutMs ? { turnTimeoutMs: a.turnTimeoutMs } : {}),
-        ...o.limits,
-      }
-      return leo.createAgent({
-        systemPrompt: `${systemPrompt}\n\nWorking directory: ${tools.workspace ? resolve(base, tools.workspace) : paths.cwd}\nToday: ${new Date().toISOString().slice(0, 10)}`,
-        ...(a.maxOutputTokens ? { maxOutputTokens: a.maxOutputTokens } : {}),
-        ...(a.temperature !== undefined ? { temperature: a.temperature } : {}),
-        ...o,
-        model: m,
-        limits,
-      })
-    },
+    createAgent: (o = {}) => leo.createAgent(agentOptions(o)),
     reloadPlugins: () => reloader.reload(),
     loadedPlugins: () => reloader.loaded(),
     dispose: async () => {
