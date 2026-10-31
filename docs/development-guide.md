@@ -379,7 +379,10 @@ leo plugin add mcp --init-from ./tpl       # 用你自己的模板目录（按�
 leo plugin init mcp [--project] [--force]  # 重新生成配置文件；已存在的文件默认保留，--force 覆盖
 leo plugin add sub-agents --npm            # npm install --prefix ~/.leo，并把包名写进 ~/.leo/config.json 的 plugins
 leo plugin add @acme/x --npm --project     # 仓库外的任意 npm 包，装到项目
-leo plugin remove mcp [--project]          # 默认移除全局安装；--project 移除项目里的
+leo plugin remove mcp                      # 卸载全局安装（默认）；别名 rm / uninstall
+leo plugin remove mcp --project            # 只卸载当前项目里的（--local / -l 同义）
+leo plugin remove mcp --all                # 全局和项目都卸载
+leo plugin remove mcp --purge              # 连同安装时生成的配置文件一起删除（默认保留）
 ```
 
 - **默认全局安装**到 `~/.leo/`（`LEO_HOME` 可改位置），在任何项目里运行 `leo` 都会加载；`--project` 才装进当前项目的 `.leo/`
@@ -391,6 +394,8 @@ leo plugin remove mcp [--project]          # 默认移除全局安装；--projec
   发布时模板随 bundle 一起上传，registry 条目带上 `init.files[].url` 与 `sha256`。`leo plugin add` 安装后自动把模板写进
   `~/.leo/` 或项目 `.leo/`（校验 sha256，路径不能越出 `.leo/`，已存在的文件不覆盖）；插件没有模板就跳过。
   npm 安装的包读取包内 `leo-plugin.json` 的 `init.files[].template`。`--init` 仍可写，等同默认。
+- **卸载**：默认卸载全局，`--project` 卸载项目，`--all` 两处都卸。只卸一处时，如果另一处还装着会提示：卸掉全局后项目里的那份仍在该项目生效；卸掉项目那份后该项目改用全局的。
+  会删除 `plugins/` 里的单文件、`config.json` 里的包名，并 `npm uninstall` 包。配置文件默认保留，`--purge` 才删除插件声明的 `init.files`。
 - **不用重启**：正在运行的 `leo`（对话、`leo api`）会自动感知安装、移除和更新并热加载（通常不到一秒，最多约 3 秒），见 4.9。
 - 插件仓库默认是官方仓库 `https://raw.githubusercontent.com/CherryKingOne/leo-plugin/main/registry.json`，
   可用 `--registry <url|路径>` 或环境变量 `LEO_PLUGIN_REGISTRY` 指向镜像或私有仓库。

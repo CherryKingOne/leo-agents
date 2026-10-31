@@ -16,7 +16,7 @@ import { textOf } from '../protocol/messages.js'
 import { PROVIDER_PRESETS } from '../providers/catalog.js'
 import type { ApprovalService } from '../tools/types.js'
 import { type CliArgs, HELP, parseArgs } from './args.js'
-import { addPlugin, DEFAULT_PLUGIN_REGISTRY, defaultIo, initPlugin, loadRegistry, removePlugin } from './plugin.js'
+import { addPlugin, DEFAULT_PLUGIN_REGISTRY, defaultIo, initPlugin, loadRegistry, uninstallPlugin } from './plugin.js'
 import { runApiServer } from '../api/server.js'
 import { askSecret, c, makeRl, oneLine, readStdin } from './ui.js'
 
@@ -166,9 +166,19 @@ async function cmdPlugin(cwd: string, args: CliArgs): Promise<number> {
       return 0
     }
     if (sub === 'remove' || sub === 'rm' || sub === 'uninstall') {
-      if (!name) return void log(c.red('用法：leo plugin remove <id> [--project]')), 2
-      const ok = await removePlugin({ name, scopeDir, registry }, io)
-      if (!ok && !project && paths.projectDir) log(c.gray(`当前项目里的安装请用：leo plugin remove ${name} --project`))
+      if (!name) return void log(c.red('用法：leo plugin remove <id> [--project | --all] [--purge]')), 2
+      if (args.all && (args.project || args.global)) return void log(c.red('--all 不能与 -g / --project 同时使用')), 2
+      const ok = await uninstallPlugin(
+        {
+          name,
+          registry,
+          userDir: paths.userDir,
+          ...(paths.projectDir ? { projectDir: paths.projectDir } : {}),
+          scope: args.all ? 'all' : project ? 'project' : 'global',
+          purge: args.purge,
+        },
+        io,
+      )
       return ok ? 0 : 1
     }
     if (sub === 'list' || sub === 'ls') {
@@ -197,7 +207,7 @@ async function cmdPlugin(cwd: string, args: CliArgs): Promise<number> {
       return 0
     }
     log(c.red(`未知子命令：${sub}`))
-    log('用法：leo plugin list | add <id> | init <id> | remove <id>')
+    log('用法：leo plugin list | add <id> [--project] | init <id> | remove <id> [--project | --all] [--purge]')
     return 2
   } catch (e) {
     log(c.red(`✗ ${(e as Error).message}`))

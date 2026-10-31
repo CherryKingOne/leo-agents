@@ -319,18 +319,39 @@ export interface RemoveOptions {
   name: string
   scopeDir: string
   registry: string
+  /** 同时删除插件安装时初始化的配置文件（默认保留，用户可能改过） */
+  purge?: boolean
 }
 
-export async function removePlugin(o: RemoveOptions, io: PluginIo): Promise<boolean> {
-  let entry: RegistryEntry | undefined
+async function entryFor(name: string, registry: string, io: PluginIo): Promise<RegistryEntry | undefined> {
   try {
-    entry = findEntry(await loadRegistry(o.registry, io), o.name)
+    return findEntry(await loadRegistry(registry, io), name)
   } catch {
-    // 离线也能移除：按名字直接处理
+    return undefined // 离线也能移除：按名字直接处理
   }
+}
+
+/** scope 目录里是否装了这个插件（plugins/ 单文件、config.json 里的包名，或 node_modules 里的包） */
+export async function isPluginInstalled(scopeDir: string, name: string, entry?: RegistryEntry): Promise<boolean> {
+  const id = entry?.id ?? name
+  const pkg = entry?.package ?? name
+  if (existsSync(bundleFile(scopeDir, id))) return true
+  if (existsSync(join(scopeDir, 'node_modules', pkg, 'package.json'))) return true
+  const text = await readFile(join(scopeDir, 'config.json'), 'utf8').catch(() => '')
+  return !!text && listPluginEntries(text).includes(pkg)
+}
+
+/** 从一个 scope（全局 ~/.leo 或项目 .leo）卸载插件。返回是否找到并移除了 */
+export async function removePlugin(o: RemoveOptions, io: PluginIo, known?: RegistryEntry): Promise<boolean> {
+  const entry = known ?? (await entryFor(o.name, o.registry, io))
   const id = entry?.id ?? o.name
   const pkg = entry?.package ?? o.name
   let removed = false
+
+  // 先记下要清理的配置文件（npm 包卸载后就读不到清单了）
+  const purgeFiles = o.purge
+    ? ((await manifestInit(join(o.scopeDir, 'node_modules', pkg)))?.init?.files ?? entry?.init?.files ?? []).map((f) => f.path)
+    : []
 
   const file = bundleFile(o.scopeDir, id)
   if (existsSync(file)) {
@@ -348,8 +369,68 @@ export async function removePlugin(o: RemoveOptions, io: PluginIo): Promise<bool
   if (existsSync(join(o.scopeDir, 'node_modules', pkg, 'package.json'))) {
     const code = await io.npm(['uninstall', '--prefix', o.scopeDir, '--no-audit', '--no-fund', pkg], o.scopeDir)
     if (code !== 0) throw new Error(`npm uninstall 失败（退出码 ${code}）`)
+    io.log(`已卸载 npm 包 ${pkg}`)
     removed = true
+  }
+  if (removed) {
+    for (const rel of purgeFiles) {
+      const target = safeTarget(o.scopeDir, rel)
+      if (existsSync(target)) {
+        await rm(target, { recursive: true })
+        io.log(`已删除配置文件 ${target}`)
+      }
+    }
   }
   if (!removed) io.log(`没有找到已安装的 "${o.name}"（${o.scopeDir}）`)
   return removed
+}
+
+export interface UninstallOptions {
+  name: string
+  registry: string
+  /** 全局目录（~/.leo） */
+  userDir: string
+  /** 当前项目的 .leo（没有项目时为 undefined） */
+  projectDir?: string
+  /** 'global'（默认）| 'project' | 'all' */
+  scope: 'global' | 'project' | 'all'
+  purge?: boolean
+}
+
+/**
+ * `leo plugin remove`：默认卸载全局安装；--project 卸载当前项目里的；--all 两处都卸载。
+ * 卸载一处后提示另一处是否还装着（项目里的安装会继续在该项目生效，删掉项目那份后全局那份接管）。
+ */
+export async function uninstallPlugin(o: UninstallOptions, io: PluginIo): Promise<boolean> {
+  const entry = await entryFor(o.name, o.registry, io)
+  const scopes: { label: string; dir: string }[] = []
+  if (o.scope !== 'project') scopes.push({ label: '全局', dir: o.userDir })
+  if (o.scope !== 'global') {
+    if (!o.projectDir) {
+      if (o.scope === 'project') {
+        io.log('当前目录及上级没有项目 .leo/，没有可卸载的项目插件')
+        return false
+      }
+    } else if (o.projectDir !== o.userDir) scopes.push({ label: '项目', dir: o.projectDir })
+  }
+  let any = false
+  for (const s of scopes) {
+    io.log(`卸载${s.label}插件 ${entry?.id ?? o.name}（${s.dir}）`)
+    if (await removePlugin({ name: o.name, scopeDir: s.dir, registry: o.registry, ...(o.purge ? { purge: true } : {}) }, io, entry)) any = true
+  }
+  if (o.scope !== 'all') {
+    const other = o.scope === 'global' ? (o.projectDir && o.projectDir !== o.userDir ? { label: '项目', dir: o.projectDir, flag: ' --project' } : undefined) : { label: '全局', dir: o.userDir, flag: '' }
+    if (other && (await isPluginInstalled(other.dir, o.name, entry))) {
+      io.log(
+        o.scope === 'global'
+          ? `提示：当前项目里还有项目级安装，在这个项目中仍会生效；一起卸载用 leo plugin remove ${o.name} --all，只卸载项目的用 leo plugin remove ${o.name}${other.flag}`
+          : `提示：全局还装着 ${o.name}，这个项目会改用全局那份；彻底卸载用 leo plugin remove ${o.name} --all`,
+      )
+    }
+  }
+  if (any) {
+    io.log('正在运行的 leo 会自动卸载它（热加载）')
+    if (!o.purge && entry?.init?.files?.length) io.log(`配置文件已保留（${entry.init.files.map((f) => f.path).join(', ')}）；连同配置一起删除请加 --purge`)
+  }
+  return any
 }

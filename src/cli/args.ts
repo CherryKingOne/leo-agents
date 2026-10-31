@@ -23,6 +23,10 @@ export interface CliArgs {
   noInit: boolean
   initFrom?: string
   force: boolean
+  /** plugin remove：全局和项目都卸载 */
+  all: boolean
+  /** plugin remove：连同初始化的配置文件一起删除 */
+  purge: boolean
   host?: string
   port?: number
   token?: string
@@ -32,7 +36,7 @@ export interface CliArgs {
 const COMMANDS = new Set(['run', 'chat', 'init', 'auth', 'models', 'doctor', 'plugin', 'plugins', 'api', 'help', 'version'])
 
 export function parseArgs(argv: string[]): CliArgs {
-  const a: CliArgs = { positionals: [], print: false, yes: false, continue: false, json: false, noTools: false, project: false, reasoning: false, help: false, version: false, global: false, npm: false, noInit: false, force: false }
+  const a: CliArgs = { positionals: [], print: false, yes: false, continue: false, json: false, noTools: false, project: false, reasoning: false, help: false, version: false, global: false, npm: false, noInit: false, force: false, all: false, purge: false }
   const rest: string[] = []
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i]!
@@ -62,6 +66,8 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--no-init': a.noInit = true; break
       case '--init-from': a.initFrom = val(); break
       case '--force': a.force = true; break
+      case '--all': a.all = true; break
+      case '--purge': a.purge = true; break
       case '--host': a.host = val(); break
       case '--port': a.port = Number(val()); break
       case '--token': a.token = val(); break
@@ -100,7 +106,9 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
                               --no-init 不初始化，--init-from 用你提供的模板目录或文件。运行中的 leo 会自动热加载
   leo plugin init <id> [--project] [--init-from <path>] [--force]
                               给插件初始化配置文件（已存在的文件默认保留）
-  leo plugin remove <id> [--project]    移除插件（默认移除全局安装）
+  leo plugin remove <id> [--project | --all] [--purge]
+                              卸载插件（别名 rm / uninstall）。默认卸载全局安装；--project（--local / -l）卸载当前项目的；
+                              --all 两处都卸载；--purge 连同安装时生成的配置文件一起删除（默认保留）
   leo api [--host 127.0.0.1] [--port 8765] [--token <t>]
                               以 HTTP API 服务方式启动（Python 服务 + 常驻 leo，插件一直在线），不进入对话
 

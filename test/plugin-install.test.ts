@@ -1,10 +1,11 @@
+import { existsSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { addPlugin, initPlugin, type PluginIo, removePlugin } from '../src/cli/plugin.js'
+import { addPlugin, initPlugin, type PluginIo, removePlugin, uninstallPlugin } from '../src/cli/plugin.js'
 import { parseArgs } from '../src/cli/args.js'
 import { addPluginEntry, listPluginEntries, removePluginEntry } from '../src/config/jsonc.js'
 import { createLeoFromConfig, resolvePluginPackage } from '../src/index.js'
@@ -288,6 +289,52 @@ describe('leo plugin add / remove', () => {
     await initPlugin({ name: 'hello', scopeDir: join(f.root, 'home'), registry: f.registry, from: join(f.root, 'custom.jsonc'), force: false }, f.io)
     expect(await readFile(join(f.root, 'home', 'hello-servers.json'), 'utf8')).toBe('{"b":2}')
   })
+  it('卸载：默认全局；--project 只卸项目；--all 两处；另一处还装着时提示', async () => {
+    const f = await fixture()
+    const home = join(f.root, 'home')
+    const proj = join(f.root, 'proj', '.leo')
+    const both = async () => {
+      await addPlugin({ name: 'hello', scopeDir: home, npm: false, registry: f.registry, leoVersion: '0.1.0' }, f.io)
+      await addPlugin({ name: 'hello', scopeDir: proj, projectRoot: join(f.root, 'proj'), npm: false, registry: f.registry, leoVersion: '0.1.0' }, f.io)
+    }
+    const g = join(home, 'plugins', 'hello.bundle.js')
+    const p = join(proj, 'plugins', 'hello.bundle.js')
+    const base = { name: 'hello', registry: f.registry, userDir: home, projectDir: proj }
+
+    await both()
+    f.logs.length = 0
+    expect(await uninstallPlugin({ ...base, scope: 'global' }, f.io)).toBe(true)
+    expect(existsSync(g)).toBe(false)
+    expect(existsSync(p)).toBe(true)
+    expect(f.logs.some((l) => l.includes('项目级安装'))).toBe(true)
+
+    await both()
+    f.logs.length = 0
+    expect(await uninstallPlugin({ ...base, scope: 'project' }, f.io)).toBe(true)
+    expect(existsSync(g)).toBe(true)
+    expect(existsSync(p)).toBe(false)
+    expect(f.logs.some((l) => l.includes('改用全局'))).toBe(true)
+
+    await both()
+    expect(await uninstallPlugin({ ...base, scope: 'all' }, f.io)).toBe(true)
+    expect(existsSync(g) || existsSync(p)).toBe(false)
+    expect(await uninstallPlugin({ ...base, scope: 'all' }, f.io)).toBe(false)
+    expect(await uninstallPlugin({ name: 'hello', registry: f.registry, userDir: home, scope: 'project' }, f.io)).toBe(false)
+  })
+
+  it('卸载默认保留配置文件，--purge 一起删除', async () => {
+    const f = await fixture({ init: { files: [{ path: 'hello.json', content: '{}' }] } })
+    const home = join(f.root, 'home')
+    const base = { name: 'hello', registry: f.registry, userDir: home, scope: 'global' as const }
+    await addPlugin({ name: 'hello', scopeDir: home, npm: false, registry: f.registry, leoVersion: '0.1.0' }, f.io)
+    await uninstallPlugin(base, f.io)
+    expect(existsSync(join(home, 'hello.json'))).toBe(true)
+    expect(f.logs.some((l) => l.includes('--purge'))).toBe(true)
+    await addPlugin({ name: 'hello', scopeDir: home, npm: false, registry: f.registry, leoVersion: '0.1.0' }, f.io)
+    await uninstallPlugin({ ...base, purge: true }, f.io)
+    expect(existsSync(join(home, 'hello.json'))).toBe(false)
+  })
+
 })
 
 describe('leo plugin 参数', () => {
@@ -300,5 +347,10 @@ describe('leo plugin 参数', () => {
     expect(parseArgs(['plugin', 'add', 'mcp', '--init']).noInit).toBe(false)
     expect(parseArgs(['plugin', 'add', 'mcp', '-g']).global).toBe(true)
   })
-})
 
+  it('remove 参数：--all / --purge', () => {
+    const a = parseArgs(['plugin', 'remove', 'mcp', '--all', '--purge'])
+    expect(a).toMatchObject({ all: true, purge: true, project: false })
+    expect(parseArgs(['plugin', 'rm', 'mcp', '-l']).project).toBe(true)
+  })
+})
