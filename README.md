@@ -20,6 +20,7 @@ cd your-project && leo           # 交互式 Agent：读写文件、搜索、执
 leo -p -y "跑测试，失败就修"       # 一次性执行
 leo init                         # 在项目里创建 .leo/config.json，配置模型、插件、工具、预算
 leo plugin add mcp               # 全局安装插件，自动生成它的配置文件，运行中的 leo 立即热加载（--project 只装到当前项目；leo plugin remove mcp 默认卸载全局，--project 卸项目，--all 都卸）
+leo api                          # 以 HTTP API 服务启动（不进入对话），插件常驻在线，见 docs/api.md
 ```
 
 在代码里使用同一套配置：
@@ -44,11 +45,12 @@ for await (const ev of agent.prompt('2+3 等于几？')) if (ev.type === 'text_d
 ```
 
 ```bash
-npm test                  # 75 个用例
+npm test                  # 61 个用例
 npm run example:basic     # 无 API Key 时离线演示
 npm run example:plugin    # 插件开发示例
 ```
 
 📘 开发文档（插件协议、注册方式、扩展点、二次开发）：[docs/development-guide.md](docs/development-guide.md)
+🌐 HTTP API（`leo api`）：[docs/api.md](docs/api.md)
 📄 架构规划：[docs/architecture-plan.md](docs/architecture-plan.md)
 🔎 配置方案调研（DeepSeek Harness / pi）：[docs/config-research.md](docs/config-research.md)
