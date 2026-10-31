@@ -147,21 +147,22 @@ async function cmdPlugin(cwd: string, args: CliArgs): Promise<number> {
   const project = args.project
   const projectRoot = project ? (paths.projectRoot ?? cwd) : undefined
   const scopeDir = project ? (paths.projectDir ?? join(cwd, '.leo')) : paths.userDir
-  const init = args.initFrom ?? (args.init ? true : undefined)
+  // 插件声明了配置文件模板时自动初始化（已存在的文件保留）；--no-init 跳过，--init-from 用自己的模板
+  const init: boolean | string = args.initFrom ?? !args.noInit
   try {
     if (sub === 'add' || sub === 'install' || sub === 'i') {
-      if (!name) return void log(c.red('用法：leo plugin add <id> [--project] [--init | --init-from <path>] [--npm]')), 2
+      if (!name) return void log(c.red('用法：leo plugin add <id> [--project] [--no-init | --init-from <path>] [--npm]')), 2
       await addPlugin(
-        { name, scopeDir, ...(projectRoot ? { projectRoot } : {}), npm: args.npm, registry, leoVersion: version(), ...(init !== undefined ? { init } : {}), force: args.force },
+        { name, scopeDir, ...(projectRoot ? { projectRoot } : {}), npm: args.npm, registry, leoVersion: version(), init, force: args.force },
         io,
       )
-      if (!init) log(c.gray(`提示：加 --init 可把插件的配置文件模板初始化到 ${scopeDir}（或运行 leo plugin init ${name}${project ? ' --project' : ''}）`))
       return 0
     }
     if (sub === 'init') {
       if (!name) return void log(c.red('用法：leo plugin init <id> [--project] [--init-from <path>] [--force]')), 2
       log(`初始化 ${name} 的配置文件 → ${scopeDir}`)
-      await initPlugin({ name, scopeDir, registry, from: args.initFrom ?? true, force: args.force }, io)
+      const written = await initPlugin({ name, scopeDir, registry, from: args.initFrom ?? true, force: args.force }, io)
+      if (!written.length) log(c.gray('没有写入新文件'))
       return 0
     }
     if (sub === 'remove' || sub === 'rm' || sub === 'uninstall') {
@@ -187,7 +188,7 @@ async function cmdPlugin(cwd: string, args: CliArgs): Promise<number> {
           const hit = resolved.plugins.find((p) => p.spec === e.package || p.spec.endsWith(`/${e.id}.bundle.js`) || p.spec.endsWith(`\\${e.id}.bundle.js`))
           const mark = hit ? c.green(` 已安装（${scopeOf(hit)}）`) : ''
           const status = e.status === 'stable' ? '' : c.yellow(` [${e.status}]`)
-          const initMark = e.init?.files?.length ? c.gray(' [--init]') : ''
+          const initMark = e.init?.files?.length ? c.gray(` [配置: ${e.init.files.map((f) => f.path).join(', ')}]`) : ''
           log(`  ${c.bold(e.id)} ${e.version}${status}${initMark}${mark}  ${c.gray(e.description)}`)
         }
       } catch (e) {
@@ -506,6 +507,12 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
   }
 
   ready = app
+  // 插件热加载：运行中安装、移除、更新插件时提示一行
+  if (interactive) {
+    app.leo.ctx.on('plugin/loaded', ({ name, reason }) => log(c.gray(`\n[插件] ${reason === 'added' ? '已加载' : '已重新加载'} ${name}`)))
+    app.leo.ctx.on('plugin/unloaded', ({ name, reason }) => void (reason === 'removed' && log(c.gray(`\n[插件] 已卸载 ${name}`))))
+    app.leo.ctx.on('plugin/failed', ({ spec, error }) => log(c.yellow(`\n[插件] 加载失败 ${spec}：${error}`)))
+  }
   if (!app.model) {
     log(c.yellow('还没有可用的模型。三选一：'))
     log(`  1) ${c.bold('leo auth set deepseek')}            保存密钥（其他：openai / qwen / moonshot / zhipu / siliconflow / openrouter）`)
@@ -580,6 +587,14 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
           }
         } else if (cmd === 'models') {
           for (const p of app.providers.filter((x) => x.loaded)) log(`  ${p.id}/${p.defaultModel ?? '<model>'}`)
+        } else if (cmd === 'plugins') {
+          if (rest[0] === 'reload') {
+            const r = await app.reloadPlugins()
+            log(c.gray(`新增 ${r.added.length} · 更新 ${r.changed.length} · 移除 ${r.removed.length}${r.failed.length ? ` · 失败 ${r.failed.length}` : ''}`))
+          }
+          const list = app.loadedPlugins()
+          if (!list.length) log(c.gray('  （没有加载第三方插件）'))
+          for (const p of list) log(`  ${p.name} ${c.gray(p.spec)}`)
         } else if (cmd === 'session') log(`会话 ${agent.sessionId}（leo -s ${agent.sessionId} 可恢复）`)
         else log(c.yellow(`未知命令 /${cmd}，输入 /help`))
         continue

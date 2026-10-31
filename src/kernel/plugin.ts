@@ -26,6 +26,12 @@ export interface PluginDefinition<C = any> {
   inject?: readonly ServiceKey[]
   /** 配置 schema（zod）。加载时 parse，失败抛出 plugin_config_invalid */
   config?: z.ZodType<C>
+  /**
+   * 热重载时要关注的数据文件（相对 `.leo/` 的路径，以 `/` 结尾表示目录），如 `['mcp-servers.json']`、`['agents/']`。
+   * 宿主（createLeoFromConfig）会同时监听 `~/.leo/` 与项目 `.leo/` 下的这些路径，变化时重新加载本插件。
+   * 只用 createLeo 手动组装时不生效。
+   */
+  watch?: readonly string[]
   /** 插件入口：在这里注册服务、监听事件、注册工具等 */
   apply(ctx: Context<C>, config: C): void | Promise<void>
 }
@@ -37,6 +43,7 @@ export interface PluginDefinition<C = any> {
 export type FunctionPlugin<C = any> = ((ctx: Context<C>, config: C) => void | Promise<void>) & {
   pluginName?: string
   inject?: readonly ServiceKey[]
+  watch?: readonly string[]
 }
 
 export type PluginLike<C = any> = PluginDefinition<C> | FunctionPlugin<C> | { default: PluginDefinition<C> | FunctionPlugin<C> }
@@ -60,6 +67,7 @@ export function normalizePlugin<C>(p: PluginLike<C>): PluginDefinition<C> {
       apply: (ctx, config) => fn(ctx, config),
     }
     if (fn.inject) def.inject = fn.inject
+    if (fn.watch) def.watch = fn.watch
     return def
   }
   if (!target || typeof target.apply !== 'function' || typeof target.name !== 'string') {

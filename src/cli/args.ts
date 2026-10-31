@@ -20,7 +20,7 @@ export interface CliArgs {
   global: boolean
   npm: boolean
   registry?: string
-  init: boolean
+  noInit: boolean
   initFrom?: string
   force: boolean
   host?: string
@@ -32,7 +32,7 @@ export interface CliArgs {
 const COMMANDS = new Set(['run', 'chat', 'init', 'auth', 'models', 'doctor', 'plugin', 'plugins', 'api', 'help', 'version'])
 
 export function parseArgs(argv: string[]): CliArgs {
-  const a: CliArgs = { positionals: [], print: false, yes: false, continue: false, json: false, noTools: false, project: false, reasoning: false, help: false, version: false, global: false, npm: false, init: false, force: false }
+  const a: CliArgs = { positionals: [], print: false, yes: false, continue: false, json: false, noTools: false, project: false, reasoning: false, help: false, version: false, global: false, npm: false, noInit: false, force: false }
   const rest: string[] = []
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i]!
@@ -58,8 +58,9 @@ export function parseArgs(argv: string[]): CliArgs {
       case '-g': case '--global': a.global = true; break
       case '--npm': a.npm = true; break
       case '--registry': a.registry = val(); break
-      case '--init': a.init = true; break
-      case '--init-from': a.initFrom = val(); a.init = true; break
+      case '--init': break // 兼容旧写法：现在默认就会初始化
+      case '--no-init': a.noInit = true; break
+      case '--init-from': a.initFrom = val(); break
       case '--force': a.force = true; break
       case '--host': a.host = val(); break
       case '--port': a.port = Number(val()); break
@@ -93,9 +94,10 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
   leo models                  查看可用的提供方与默认模型
   leo doctor                  诊断：配置文件、密钥来源、插件、会话目录
   leo plugin list             查看已安装的插件（全局 / 当前项目）与官方插件仓库
-  leo plugin add <id> [--project] [--init | --init-from <path>] [--npm]
-                              安装插件。默认全局安装到 ~/.leo（所有项目可用）；--project 装到当前项目 .leo/；
-                              --init 同时把插件的配置文件模板初始化到对应 .leo/，--init-from 用你提供的模板目录或文件
+  leo plugin add <id> [--project] [--no-init | --init-from <path>] [--npm]
+                              安装插件。默认全局安装到 ~/.leo（所有项目可用）；--project 装到当前项目 .leo/。
+                              插件带配置文件模板时自动初始化到对应 .leo/（已有文件保留），没有则跳过；
+                              --no-init 不初始化，--init-from 用你提供的模板目录或文件。运行中的 leo 会自动热加载
   leo plugin init <id> [--project] [--init-from <path>] [--force]
                               给插件初始化配置文件（已存在的文件默认保留）
   leo plugin remove <id> [--project]    移除插件（默认移除全局安装）
@@ -123,4 +125,4 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
 内置提供方：deepseek, openai, qwen, moonshot, zhipu, siliconflow, openrouter, ollama
 （设置对应环境变量如 DEEPSEEK_API_KEY 即自动启用；其他 OpenAI 兼容端点在 .leo/config.json 中配置）
 
-交互模式命令：/help /new /model <p/m> /models /session /exit`
+交互模式命令：/help /new /model <p/m> /models /plugins [reload] /session /exit`

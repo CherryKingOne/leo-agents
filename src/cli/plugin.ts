@@ -7,8 +7,9 @@
  * scope 默认为用户 `~/.leo/`（全局，所有项目可用）；`--project` 装到当前项目的 `.leo/`，
  * 同一插件在两处都装时项目里的优先。
  *
- * 初始化（--init / --init-from <path>）：把插件声明的配置文件模板写进 scope 目录，
- * 例如 mcp 的 `mcp-servers.json`，装完即可直接编辑使用；已存在的文件不覆盖（--force 才覆盖）。
+ * 初始化：插件声明了配置文件模板（registry 的 init.files）时，安装后自动写进 scope 目录，
+ * 例如 mcp 的 `mcp-servers.json`；没有模板则跳过。已存在的文件不覆盖（--force 才覆盖），
+ * --no-init 跳过，--init-from <path> 改用用户提供的模板。
  */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -129,7 +130,7 @@ export interface AddOptions {
   npm: boolean
   registry: string
   leoVersion: string
-  /** 安装后初始化插件的配置文件：true 用插件自带模板，字符串为用户提供的模板目录或文件 */
+  /** 安装后初始化插件的配置文件（默认 true：有模板就初始化，没有就跳过）；false 跳过；字符串为用户提供的模板目录或文件 */
   init?: boolean | string
   /** 初始化时覆盖已存在的文件 */
   force?: boolean
@@ -171,8 +172,8 @@ export async function addPlugin(o: AddOptions, io: PluginIo): Promise<void> {
     const file = bundleFile(o.scopeDir, entry.id)
     await mkdir(dirname(file), { recursive: true })
     await writeFile(file, bytes)
-    io.log(`已安装 ${entry.id}@${entry.version} → ${file}（${o.projectRoot ? '当前项目' : '全局，所有项目可用'}，自动加载）`)
-    if (o.init) await initFiles({ entry, scopeDir: o.scopeDir, registry: o.registry, from: o.init, force: !!o.force }, io)
+    io.log(`已安装 ${entry.id}@${entry.version} → ${file}（${o.projectRoot ? '当前项目' : '全局，所有项目可用'}；正在运行的 leo 会自动加载）`)
+    if (o.init !== false) await initFiles({ entry, scopeDir: o.scopeDir, registry: o.registry, from: o.init ?? true, force: !!o.force, quiet: true }, io)
     io.log(`要修改插件选项，在 ${join(o.scopeDir, 'config.json')} 的 plugins 中写：["./${o.projectRoot ? '.leo/' : ''}plugins/${entry.id}.bundle.js", { ... }]`)
     return
   }
@@ -188,9 +189,9 @@ export async function addPlugin(o: AddOptions, io: PluginIo): Promise<void> {
   await writeFile(cfg, addPluginEntry(text, pkgName), 'utf8')
   if (o.projectRoot) await ensureGitignore(o.projectRoot, ['.leo/node_modules/'])
   io.log(`已安装 ${pkgName}（${o.projectRoot ? '当前项目' : '全局，所有项目可用'}），并加入 ${cfg} 的 plugins`)
-  if (o.init) {
+  if (o.init !== false) {
     const local = await manifestInit(join(o.scopeDir, 'node_modules', pkgName))
-    await initFiles({ entry: local ?? entry, scopeDir: o.scopeDir, registry: o.registry, from: o.init, force: !!o.force }, io)
+    await initFiles({ entry: local ?? entry, scopeDir: o.scopeDir, registry: o.registry, from: o.init ?? true, force: !!o.force, quiet: true }, io)
   }
 }
 
@@ -235,6 +236,8 @@ export interface InitOptions {
   /** true：插件自带模板；字符串：用户提供的模板目录（按相对路径复制）或单个文件 */
   from: boolean | string
   force: boolean
+  /** 插件没有模板时不打印提示（安装时自动初始化用） */
+  quiet?: boolean
 }
 
 /** 把插件的配置文件模板写进 scope 目录。返回写入的文件 */
@@ -256,7 +259,7 @@ export async function initFiles(o: InitOptions, io: PluginIo): Promise<string[]>
     }
   } else {
     if (!declared.length) {
-      io.log(`插件 "${o.entry?.id ?? '?'}" 没有需要初始化的配置文件`)
+      if (!o.quiet) io.log(`插件 "${o.entry?.id ?? '?'}" 没有需要初始化的配置文件`)
       return []
     }
     for (const f of declared) {

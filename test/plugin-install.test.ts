@@ -228,7 +228,7 @@ describe('leo plugin add / remove', () => {
     await app.dispose()
   })
 
-  it('--init 用插件自带模板初始化配置文件（url 校验 sha256、内联内容、子目录），已存在的不覆盖', async () => {
+  it('安装时自动用插件自带模板初始化配置文件（url 校验 sha256、内联内容、子目录），已存在的不覆盖', async () => {
     const tpl = '{\n  "mcpServers": {}\n}\n'
     const f0 = await fixture()
     await writeFile(join(f0.root, 'reg', 'servers.json'), tpl)
@@ -243,7 +243,7 @@ describe('leo plugin add / remove', () => {
     })
     await writeFile(join(f.root, 'reg', 'servers.json'), tpl)
     const home = join(f.root, 'home')
-    await addPlugin({ name: 'hello', scopeDir: home, npm: false, registry: f.registry, leoVersion: '0.1.0', init: true }, f.io)
+    await addPlugin({ name: 'hello', scopeDir: home, npm: false, registry: f.registry, leoVersion: '0.1.0' }, f.io)
     expect(await readFile(join(home, 'hello-servers.json'), 'utf8')).toBe(tpl)
     expect(await readFile(join(home, 'agents', 'reviewer.md'), 'utf8')).toBe('# reviewer\n')
 
@@ -253,6 +253,16 @@ describe('leo plugin add / remove', () => {
     expect(f.logs.some((l) => l.includes('已存在，保留'))).toBe(true)
     await initPlugin({ name: 'hello', scopeDir: home, registry: f.registry, from: true, force: true }, f.io)
     expect(await readFile(join(home, 'hello-servers.json'), 'utf8')).toBe(tpl)
+  })
+
+  it('--no-init 不初始化；插件没有模板时静默跳过', async () => {
+    const f = await fixture({ init: { files: [{ path: 'x.json', content: '{}' }] } })
+    const home = join(f.root, 'home')
+    await addPlugin({ name: 'hello', scopeDir: home, npm: false, registry: f.registry, leoVersion: '0.1.0', init: false }, f.io)
+    await expect(readFile(join(home, 'x.json'))).rejects.toThrow()
+    const g = await fixture()
+    await addPlugin({ name: 'hello', scopeDir: join(g.root, 'home'), npm: false, registry: g.registry, leoVersion: '0.1.0' }, g.io)
+    expect(g.logs.some((l) => l.includes('没有需要初始化'))).toBe(false)
   })
 
   it('模板 sha256 不符、路径越界时拒绝', async () => {
@@ -281,11 +291,13 @@ describe('leo plugin add / remove', () => {
 })
 
 describe('leo plugin 参数', () => {
-  it('默认全局；--project / --local / -l 指向项目；--init-from 隐含 --init', () => {
+  it('默认全局；--project / --local / -l 指向项目；默认初始化，--no-init 关闭', () => {
     expect(parseArgs(['plugin', 'add', 'mcp']).project).toBe(false)
     for (const flag of ['--project', '--local', '-l']) expect(parseArgs(['plugin', 'add', 'mcp', flag]).project).toBe(true)
     const a = parseArgs(['plugin', 'add', 'mcp', '--init-from', './t', '--force'])
-    expect(a).toMatchObject({ init: true, initFrom: './t', force: true, positionals: ['add', 'mcp'] })
+    expect(a).toMatchObject({ noInit: false, initFrom: './t', force: true, positionals: ['add', 'mcp'] })
+    expect(parseArgs(['plugin', 'add', 'mcp', '--no-init']).noInit).toBe(true)
+    expect(parseArgs(['plugin', 'add', 'mcp', '--init']).noInit).toBe(false)
     expect(parseArgs(['plugin', 'add', 'mcp', '-g']).global).toBe(true)
   })
 })
