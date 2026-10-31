@@ -1,5 +1,18 @@
 # 更新日志
 
+## 0.3.0 — 未发布
+
+> 在 `feat/provider-plugin` 分支开发，未合并到 main、未打标签。配合 leo-plugin 的 `provider` / `provider-deepseek` 0.2.0 使用（插件也兼容 0.2.0 底座，只是没有下面这些能力）。
+
+**真实模型列表、思考模式与推理强度。**
+
+- `ModelInfo` 新增 `name`（展示名）、`inputModalities` / `outputModalities`、`reasoning`（是否支持思考、能否关闭、默认开关、可用强度档位与默认档位）、`ownedBy`、`alias`、`source`
+- `LlmProvider` 新增可选 `refreshModels()`：向厂商接口实时获取模型列表与详情；`llm` 服务新增 `models({ refresh })`，获取失败的 provider 退回内置列表并给出原因，别名不展示
+- `LlmRequest` / `AgentOptions` 新增 `reasoning: { enabled?, effort? }`，配置 `agent.reasoning` 设默认值；由厂商插件翻译成各自参数
+- `leo models [provider] [--offline]`：列出每个提供方的全部真实模型及详情（默认实时获取），标出默认模型
+- 新增 `--thinking on|off`（`--no-thinking`）、`--effort <level>`；交互命令 `/models` 编号列出模型、`/model <编号>` 切换，`/think on|off`、`/effort <level>` 运行中调整（保留当前会话）；状态行显示思考设置
+- 配置模板与示例里的模型名改为 `deepseek-flash`
+
 ## 0.2.0 — 2026-10-31
 
 > 在 `feat/provider-plugin` 分支发布，未合并到 main。需要配合 leo-plugin 的 `provider` 与 `provider-deepseek` 插件使用。

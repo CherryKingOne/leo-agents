@@ -14,6 +14,12 @@ export interface CliArgs {
   noTools: boolean
   project: boolean
   reasoning: boolean
+  /** --thinking on|off */
+  thinking?: string
+  /** --effort <level> */
+  effort?: string
+  /** leo models --offline：不实时获取，只看内置列表 */
+  offline?: boolean
   help: boolean
   version: boolean
   maxSteps?: number
@@ -54,6 +60,10 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--no-tools': a.noTools = true; break
       case '--project': case '--local': case '-l': a.project = true; break
       case '--reasoning': a.reasoning = true; break
+      case '--thinking': case '--think': a.thinking = val(); break
+      case '--no-thinking': a.thinking = 'off'; break
+      case '--effort': case '--reasoning-effort': a.effort = val(); break
+      case '--offline': a.offline = true; break
       case '--max-steps': a.maxSteps = Number(val()); break
       case '-g': case '--global': a.global = true; break
       case '--npm': a.npm = true; break
@@ -89,7 +99,9 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
   leo init                    在当前目录创建 .leo/（配置模板、.gitignore 规则），可顺便保存密钥
   leo auth set <provider> [key] [--project]   保存密钥（默认 ~/.leo，--project 存到 ./.leo）
   leo auth list | remove <provider>
-  leo models                  查看可用的提供方与默认模型
+  leo models [provider] [--offline]
+                              查看可用的提供方与全部模型（从厂商接口实时获取真实模型名与详情：上下文、最大输出、
+                              输入模态、思考与推理强度档位；--offline 只看插件内置列表）
   leo doctor                  诊断：配置文件、密钥来源、插件、会话目录
   leo serve                   后台常驻：不进入对话，只加载配置与插件并保持在线（网关、渠道机器人等插件用它运行），Ctrl+C 停止
   leo plugin list             查看已安装的插件（全局 / 当前项目）与官方插件仓库
@@ -104,7 +116,7 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
                               --all 两处都卸载；--purge 连同安装时生成的配置文件一起删除（默认保留）
 
 选项
-  -m, --model <p/m>           指定模型，如 deepseek/deepseek-chat
+  -m, --model <p/m>           指定模型，如 deepseek/deepseek-flash（可选模型见 leo models）
   -y, --yes                   自动批准写文件 / 执行命令（等同 tools.approval = "auto"）
   -c, --continue              继续最近一次会话
   -s, --session <id>          继续指定会话
@@ -112,6 +124,9 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
       --no-tools              不启用内置工具
       --json                  以 JSONL 输出事件流
       --reasoning             显示模型的思考过程
+      --thinking <on|off>     开启 / 关闭思考模式（--no-thinking 同 off；不写由模型决定，多数默认开启）
+      --effort <level>        推理强度：none / minimal / low / medium / high / xhigh / max
+                              （每个模型支持的档位见 leo models，不支持的档位由插件映射到最接近的一档；none 即关闭思考）
       --max-steps <n>         单次任务最多模型调用次数
       --cwd <dir>             工作目录
       --registry <url|path>   插件仓库地址（默认官方仓库，也可用 LEO_PLUGIN_REGISTRY）
@@ -121,4 +136,9 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
 模型供应商由插件提供：leo plugin add provider && leo plugin add provider-deepseek
 （设置对应环境变量如 DEEPSEEK_API_KEY 即自动启用；其他 OpenAI 兼容端点在 .leo/config.json 中配置）
 
-交互模式命令：/help /new /model <p/m> /models /plugins [reload] /session /exit`
+交互模式命令：
+  /models                     列出全部模型（编号）及详情
+  /model [<p/m> | <编号>]     查看或切换模型
+  /think [on|off]             查看或切换思考模式
+  /effort [<level>]           查看或设置推理强度
+  /new /plugins [reload] /session /help /exit`

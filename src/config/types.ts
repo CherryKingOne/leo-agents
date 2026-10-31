@@ -52,6 +52,16 @@ export const LeoConfigSchema = z
         turnTimeoutMs: z.number().int().positive().optional(),
         maxOutputTokens: z.number().int().positive().optional(),
         temperature: z.number().optional(),
+        /**
+         * 思考模式与推理强度，如 `{ "enabled": true, "effort": "high" }`。不写由模型决定；
+         * 每个模型支持的档位见 `leo models`。也可用 --thinking / --effort 或交互命令 /think、/effort 临时调整
+         */
+        reasoning: z
+          .object({
+            enabled: z.boolean().optional(),
+            effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional(),
+          })
+          .optional(),
       })
       .default({}),
     sessions: z.object({ dir: z.string().optional(), persist: z.boolean().default(true) }).default({ persist: true }),

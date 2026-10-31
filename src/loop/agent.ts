@@ -344,6 +344,7 @@ export class DefaultAgent implements Agent {
       temperature: o.temperature,
       topP: o.topP,
       stop: o.stop,
+      reasoning: o.reasoning && Object.keys(o.reasoning).length ? o.reasoning : undefined,
       providerOptions: o.providerOptions,
     })
     // 模型可见即已记录：先写日志再发请求
