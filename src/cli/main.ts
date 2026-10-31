@@ -668,6 +668,7 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
                 await agent.dispose()
                 model = target
                 agent = newAgent(sid)
+                void app.leo.ctx.emit('llm/selected', { model, reasoning, changed: 'model' })
                 const info = infoOf(model)
                 log(c.gray(`已切换到 ${model}${info ? `（${describeModel(info)}）` : ''} · ${describeReasoning(reasoning, info)}`))
               } catch (e) {
@@ -702,6 +703,7 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
               const sid = agent.sessionId
               await agent.dispose()
               agent = newAgent(sid)
+              if (model) void app.leo.ctx.emit('llm/selected', { model, reasoning, changed: 'thinking' })
               log(c.gray(describeReasoning(reasoning, infoOf(model))))
             }
           }
@@ -718,6 +720,7 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
               const sid = agent.sessionId
               await agent.dispose()
               agent = newAgent(sid)
+              if (model) void app.leo.ctx.emit('llm/selected', { model, reasoning, changed: 'effort' })
               const lv = info?.reasoning?.efforts
               const note = e !== 'none' && lv?.length && !lv.includes(e) ? c.yellow(`（${model} 不支持 ${e}，由插件映射到最接近的档位；支持 ${lv.join(' / ')}）`) : ''
               log(c.gray(describeReasoning(reasoning, info)) + note)

@@ -91,6 +91,21 @@ describe('插件热加载', () => {
     await f.app.dispose()
   })
 
+  it('插件自己写数据文件并发出 plugin/data-written 时不重新加载', async () => {
+    const f = await fixture()
+    await writeFile(join(f.home, 'plugins', 'hot.bundle.js'), pluginSrc('v1'))
+    await f.app.reloadPlugins()
+    await writeFile(join(f.home, 'hot-data.json'), '{"self":1}')
+    await f.app.leo.ctx.emit('plugin/data-written', { plugin: 'hot' })
+    const r = await f.app.reloadPlugins()
+    expect(r.changed).toHaveLength(0)
+    expect(f.svc()?.data).toBe('')
+    // 别人改的照常重新加载
+    await writeFile(join(f.home, 'hot-data.json'), '{"user":2,"more":true}')
+    expect((await f.app.reloadPlugins()).changed).toHaveLength(1)
+    await f.app.dispose()
+  })
+
   it('新版本加载失败时恢复旧版本，修好后再加载', async () => {
     const f = await fixture()
     await writeFile(join(f.home, 'plugins', 'hot.bundle.js'), pluginSrc('good'))
