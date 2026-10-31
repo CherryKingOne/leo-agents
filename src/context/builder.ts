@@ -50,7 +50,7 @@ export const truncateStrategy: CompactionStrategy = {
 
 /**
  * 摘要式压缩策略：调用模型把较早的对话总结成一条消息。
- * 用法：`ctx.get('context').setCompactionStrategy(createSummarizingStrategy(ctx, { model: 'deepseek/deepseek-chat' }))`
+ * 用法：`ctx.get('context').setCompactionStrategy(createSummarizingStrategy(ctx, { model: 'deepseek/deepseek-flash' }))`
  */
 export function createSummarizingStrategy(
   ctx: Context<any>,

@@ -5,7 +5,7 @@
 - **插件内核**（借鉴 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) / Cordis）：服务仓库、五种分发模式的类型化事件、可撤销副作用、依赖注入与热重载
 - **通用 Agent Loop**：流式输出、并发工具执行、指数退避重试、上下文溢出自动压缩、steer / followUp、取消与超时、步数 / token / 成本预算、会话锁、只追加可回放日志
 - **工具管线**：zod 参数校验、策略钩子（allow / deny / ask）、审批服务、单调守卫、超时与重试、结果后处理
-- **模型接入即插件**：内置 DeepSeek / OpenAI / 通义 / Kimi / 智谱 / SiliconFlow / OpenRouter / Ollama 预设，任意 OpenAI 兼容端点写个 baseURL 即可；其他协议由插件注册提供方类型
+- **模型接入即插件**：底座不内置任何厂商，只留 `llm` 接缝；模型由供应商插件接入——注册层 `provider`（自带通用 OpenAI 兼容协议，任意兼容端点写 baseURL 即可）+ 厂商子插件（`provider-deepseek`，以后的通义、Kimi……）
 - **`.leo` 配置**：`~/.leo` 与项目 `.leo/` 两级，`credentials.json` 存密钥（支持 `$ENV` / `!command`），配置非法即报错
 - **开箱即用的 `leo` 命令行**：交互 / 一次性 / 管道，内置文件、搜索、bash、网页工具，写入与执行默认需确认
 - **开发体验**（借鉴 [pi](https://github.com/earendil-works/pi)）：一个函数就是一个插件
@@ -15,6 +15,8 @@
 ```bash
 npm install && npm link          # install 时自动构建，link 后得到 leo 命令
 chmod +x dist/cli/main.js        # 命令授权
+leo plugin add provider          # 模型供应商注册层（底座不内置厂商）
+leo plugin add provider-deepseek # DeepSeek 子插件
 leo auth set deepseek            # 保存密钥到 ~/.leo/credentials.json（或 export DEEPSEEK_API_KEY=...）
 cd your-project && leo           # 交互式 Agent：读写文件、搜索、执行命令、抓网页（写入/执行前会询问）
 leo -p -y "跑测试，失败就修"       # 一次性执行
@@ -34,18 +36,20 @@ console.log((await app.createAgent().run('总结 README.md')).text)
 完全手动组装（模型接入也是插件）：
 
 ```ts
-import { createLeo, deepseek, defineTool, z } from 'leo-agents'
+import { createLeo, defineTool, z } from 'leo-agents'
+import provider from 'leo-plugin-provider'
+import deepseek from 'leo-plugin-provider-deepseek'
 
-const leo = await createLeo({ plugins: [deepseek()] })   // 读取 DEEPSEEK_API_KEY
+const leo = await createLeo({ plugins: [provider, deepseek] })   // 读取 DEEPSEEK_API_KEY
 leo.ctx.get('tools').register(
   defineTool({ name: 'add', description: '两数相加', parameters: z.object({ a: z.number(), b: z.number() }), execute: ({ a, b }) => String(a + b) }),
 )
-const agent = leo.createAgent({ model: 'deepseek/deepseek-chat', systemPrompt: '你是一个助手' })
+const agent = leo.createAgent({ model: 'deepseek/deepseek-flash', systemPrompt: '你是一个助手' })
 for await (const ev of agent.prompt('2+3 等于几？')) if (ev.type === 'text_delta') process.stdout.write(ev.text)
 ```
 
 ```bash
-npm test                  # 75 个用例
+npm test                  # 79 个用例
 npm run example:basic     # 无 API Key 时离线演示
 npm run example:plugin    # 插件开发示例
 ```

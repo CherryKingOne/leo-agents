@@ -38,6 +38,8 @@ git clone https://github.com/CherryKingOne/leo-agents.git
 cd leo-agents && npm install        # install 时自动 build
 npm link                            # 得到全局命令 leo（或用 node dist/cli/main.js 代替）
 
+leo plugin add provider             # 模型供应商注册层（底座不内置任何厂商）
+leo plugin add provider-deepseek    # DeepSeek 子插件
 leo auth set deepseek               # 输入密钥（隐藏输入），存到 ~/.leo/credentials.json，权限 600
 # 或者：export DEEPSEEK_API_KEY=sk-...
 
@@ -77,13 +79,15 @@ for await (const ev of agent.prompt('总结 docs/ 目录下的文档')) {
 ### 1.3 完全手动组装（底座用法）
 
 ```ts
-import { createLeo, deepseek, defineTool, z } from 'leo-agents'
+import { createLeo, defineTool, z } from 'leo-agents'
+import provider from 'leo-plugin-provider'                  // 模型供应商注册层（leo-plugin 仓库）
+import deepseek from 'leo-plugin-provider-deepseek'         // DeepSeek 子插件
 
-const leo = await createLeo({ plugins: [deepseek()] })     // 模型接入也是插件，读取 DEEPSEEK_API_KEY
+const leo = await createLeo({ plugins: [provider, deepseek] })   // 模型接入也是插件，读取 DEEPSEEK_API_KEY
 leo.ctx.get('tools').register(
   defineTool({ name: 'add', description: '两数相加', parameters: z.object({ a: z.number(), b: z.number() }), execute: ({ a, b }) => String(a + b) }),
 )
-const agent = leo.createAgent({ model: 'deepseek/deepseek-chat', systemPrompt: '你是一个助手' })
+const agent = leo.createAgent({ model: 'deepseek/deepseek-flash', systemPrompt: '你是一个助手' })
 const r = await agent.run('2+3 等于几？')
 console.log(r.text, r.reason, r.usage)
 ```
@@ -125,17 +129,9 @@ JSON，允许 `//` 整行注释。所有字段可选。
 
 ```jsonc
 {
-  "model": "deepseek/deepseek-chat",            // 默认模型 <provider>/<model>；不写则取第一个可用提供方的默认模型
-  "providers": {
-    "deepseek": {},                              // 内置预设只写要改的字段
-    "openai":   { "baseURL": "https://my-gateway.example.com/v1" },
-    "vllm":     { "baseURL": "http://gpu01:8000/v1", "models": ["Qwen/Qwen3-32B"] },          // 任意 OpenAI 兼容端点
-    "acme":     { "baseURL": "https://api.acme.ai/v1", "apiKey": "$ACME_API_KEY",
-                  "headers": { "X-Org": "!cat ~/.acme/org" },
-                  "models": [{ "id": "acme-large", "contextWindow": 200000, "pricing": { "inputPerMTok": 1, "outputPerMTok": 3 } }] },
-    "claude":   { "type": "anthropic" },         // 非 OpenAI 协议：由插件注册的提供方类型处理（见 8.2）
-    "ollama":   { "enabled": false }
-  },
+  "model": "deepseek/deepseek-flash",           // 默认模型 <provider>/<model>；不写则取默认 provider 的默认模型
+  // 模型供应商的配置在插件的 provider.json（见 leo-plugin 的 provider）；
+  // 0.1.x 写在这里的 "providers": { ... } 仍由 provider 插件读取，照常生效
   "plugins": ["leo-plugin-memory", ["./tools/my-plugin.mjs", { "foo": 1 }]],
   "tools": {
     "builtin": ["read_file", "grep", "bash"],    // false 关闭全部内置工具
@@ -166,25 +162,12 @@ JSON，允许 `//` 整行注释。所有字段可选。
 | `"apiKey": "$NAME"` / `"${NAME}"` | 读取环境变量 |
 | `"apiKey": "!op read op://dev/deepseek/key"` | 执行命令取输出（1Password、Keychain、vault），进程内缓存 |
 | `"apiKey": "sk-..."` | 字面值，不推荐提交到仓库 |
-| `DEEPSEEK_API_KEY` 等 | 内置预设的环境变量回退 |
+| `DEEPSEEK_API_KEY` 等 | 驱动声明的环境变量回退（如 provider-deepseek） |
 
 优先级：`--api-key` > 项目 `credentials.json` > 用户 `credentials.json` > 配置里的 `apiKey` > 环境变量。
 密钥在每次请求时解析，换密钥不用重启。所有提供方插件（含第三方）通过 `ctx.get('credentials')` 统一取密钥，这些来源对它们同样生效。
 
-内置预设：
-
-| id | baseURL | 环境变量 | 默认模型 |
-|---|---|---|---|
-| `deepseek` | https://api.deepseek.com/v1 | `DEEPSEEK_API_KEY` | deepseek-chat |
-| `openai` | https://api.openai.com/v1 | `OPENAI_API_KEY` | gpt-4o-mini |
-| `qwen` | https://dashscope.aliyuncs.com/compatible-mode/v1 | `DASHSCOPE_API_KEY` | qwen-plus |
-| `moonshot` | https://api.moonshot.cn/v1 | `MOONSHOT_API_KEY` | 需指定 |
-| `zhipu` | https://open.bigmodel.cn/api/paas/v4 | `ZHIPUAI_API_KEY` | 需指定 |
-| `siliconflow` | https://api.siliconflow.cn/v1 | `SILICONFLOW_API_KEY` | 需指定 |
-| `openrouter` | https://openrouter.ai/api/v1 | `OPENROUTER_API_KEY` | 需指定 |
-| `ollama` | http://localhost:11434/v1 | 无需密钥 | 需指定（需在配置中声明才加载） |
-
-检测到密钥的预设会自动启用，不需要写配置。默认模型会随厂商更新变化，以厂商文档为准，可以用 `model` 指定。
+底座不内置任何模型厂商（0.2.0 起）。厂商列表、默认模型、baseURL 都在模型供应商插件里：注册层 `provider` + 厂商子插件 `provider-deepseek` 等，见 leo-plugin 仓库 `plugins/provider/README.md`。
 
 ### 2.4 安全提示
 
@@ -216,12 +199,11 @@ JSON，允许 `//` 整行注释。所有字段可选。
 |---|---|
 | `src/kernel/` | 插件运行时：`Kernel`、`Context`、`EventBus`、`definePlugin` |
 | `src/protocol/` | 厂商无关的消息类型 `AgentMessage`、`ContentBlock`、`Usage` |
-| `src/llm/` | `LlmService`、`LlmProvider` 接口、`OpenAICompatibleProvider`、`MockProvider` |
+| `src/llm/` | `LlmService`、`LlmProvider` 接口、`providerPlugin()`、`MockProvider`（具体厂商在 leo-plugin 的 provider 插件） |
 | `src/session/` | 只追加会话日志：`InMemorySessionStore`、`FileSessionStore`、`deriveMessages` |
 | `src/tools/` | `defineTool`、工具注册表、执行管线（预检 → 审批 → 守卫 → 执行 → 后处理） |
 | `src/context/` | system prompt 分层组装、token 预算、压缩策略、消息修复 |
 | `src/loop/` | `DefaultAgent`：通用 Agent Loop |
-| `src/providers/` | 模型接入插件：`openaiCompatible()`、内置预设 `deepseek()` 等、提供方类型注册表 `providerKinds` |
 | `src/config/` | `.leo` 配置发现与合并、密钥解析与凭据服务、`createLeoFromConfig()` |
 | `src/tools/builtin.ts` | 内置工具（文件 / 搜索 / bash / 网页）与审批策略插件 |
 | `src/cli/` | `leo` 命令行（只用公开 API 实现，也是接入示例） |
@@ -415,7 +397,7 @@ leo plugin remove mcp --purge              # 连同安装时生成的配置文�
 
 ```ts
 const factory = ctx.maybe('agentFactory')          // 手动 createLeo 组装时没有，插件要能降级
-factory?.defaultModel                              // 'deepseek/deepseek-chat' | undefined
+factory?.defaultModel                              // 'deepseek/deepseek-flash' | undefined
 const agent = factory?.create({ sessionId: 'chat-123', label: 'gateway:telegram', limits: { maxSteps: 20 } })
 // 传入的选项覆盖默认值，limits 逐项合并；systemPrompt() 返回宿主默认提示词，插件可在其后追加自己的说明
 ```
@@ -675,78 +657,46 @@ definePlugin({
 
 ## 8. 接入模型（Provider）
 
-模型接入全部是插件：加载即注册到 `llm` 服务，卸载即撤销。三种方式，按需选最简单的：
+0.2.0 起底座**不内置任何模型厂商**，只保留接缝：`llm` 服务、`LlmProvider` 接口、`llm/stream` 中间件、`providerPlugin()`、`MockProvider`。
+模型全部由插件注册到 `llm` 服务，加载即注册，卸载即撤销：
+
+```
+Agent ⇄ llm 服务（底座）
+          ⇅
+      provider（注册层，leo-plugin）：读 provider.json、取密钥、选默认模型
+        ├── provider-deepseek   厂商子插件（驱动）
+        ├── provider-xxx        以后的厂商子插件
+        └── openai-compatible   注册层内置的通用协议
+```
 
 | 需求 | 做法 |
 |---|---|
-| 内置预设（DeepSeek、OpenAI、通义、Kimi、智谱、SiliconFlow、OpenRouter、Ollama） | 有密钥即自动启用；代码里 `plugins: [deepseek()]` |
-| 任意 OpenAI 兼容端点（vLLM、SGLang、网关、leo-inference） | `.leo/config.json` 写 `baseURL`；代码里 `openaiCompatible({...})` |
-| 其他协议 / 自定义认证 / 动态模型列表 | 写插件：注册提供方类型或直接注册 `LlmProvider` |
+| 有子插件的厂商（DeepSeek……） | `leo plugin add provider && leo plugin add provider-deepseek`，`leo auth set deepseek` |
+| 任意 OpenAI 兼容端点（通义、Kimi、vLLM、SGLang、Ollama、公司网关） | 装 `provider`，在 `provider.json` 写 `baseURL` |
+| 新厂商 / 其他协议 | 写子插件：向服务 `providers` 注册驱动或协议（见 leo-plugin `plugins/provider/README.md`） |
+| 代码里自己实现 | 实现 `LlmProvider`，`providerPlugin(instance)` 挂上去（8.3） |
 
-### 8.1 内置预设与 OpenAI 兼容插件
+0.1.x 的 `.leo/config.json` 写法（`"model"` + `"providers"`）由 `provider` 插件照常读取；`deepseek-chat` 等已下线的模型名由 `provider-deepseek` 自动改写。
 
-```ts
-import { createLeo, deepseek, openaiCompatible, qwen } from 'leo-agents'
+### 8.1 provider 插件需要的宿主能力
 
-const leo = await createLeo({
-  plugins: [
-    deepseek(),                                             // DEEPSEEK_API_KEY 或 credentials 服务
-    qwen({ apiKey: '$MY_DASHSCOPE_KEY' }),                  // apiKey 支持 $ENV / !command / 字面值
-    openaiCompatible({
-      id: 'vllm',                                           // 模型前缀：'vllm/Qwen3-32B'
-      baseURL: 'http://gpu01:8000/v1',
-      models: [{ id: 'Qwen3-32B', contextWindow: 128_000, pricing: { inputPerMTok: 0, outputPerMTok: 0 } }],
-      connectTimeoutMs: 60_000,                             // 等待响应头
-      idleTimeoutMs: 120_000,                               // 两个流分片间最大间隔
-      maxTokensField: 'max_tokens',                         // OpenAI 新模型用 'max_completion_tokens'
-      sendReasoning: false,                                 // 是否把历史 reasoning 以 reasoning_content 回传
-      headers: { 'X-Org': '$ORG_ID' },                      // 请求头值也支持 $ENV / !command
-      default: true,                                        // 不带前缀的模型名走它
-    }),
-  ],
-})
-```
+底座为模型供应商插件提供：
 
-已处理：SSE 跨块解析、`reasoning_content`、流式 tool call 拼接、usage（含缓存命中）、`Retry-After`、
-`insufficient_quota` 不重试、上下文超长识别为 `context_overflow`、连接/空闲超时、缺少密钥时给出 `leo auth set` 提示。
-
-已经有 `LlmProvider` 实例时用 `providerPlugin(instance)` 包装；`createLeo({ providers: [...] })` 仍然可用，等价于逐个包装。
-
-### 8.2 提供方类型：让配置文件能用你的协议
-
-`.leo/config.json` 里每个提供方有 `type`（默认 `openai-compatible`）。插件可以注册新类型，
-之后用户只写配置就能用，不需要碰代码：
+- `ctx.get('llm').registerProvider(p, { default })`：注册 / 撤销
+- `ctx.maybe('credentials')`：统一取密钥（`--api-key`、`credentials.json`、`$ENV`、`!command`）
+- `ctx.maybe('leoConfig')`：合并后的 `.leo/config.json`（只读），读默认模型 `model` 与 0.1.x 的 `providers`
+- `LlmProvider` 的可选字段 `name`、`defaultModel`、`listModels()`、`status()`：`leo models` / `leo doctor` 据此显示；`status().ready === false`（如缺密钥）的 provider 不会被选为默认模型
+- 插件不能运行时 import leo-agents，抛不出 `LeoError` 实例：抛带 `Symbol.for('leo.error')` 标记和 `code` 的普通 Error，宿主按 code 处理（`LEO_ERROR_MARK`）
 
 ```ts
-// leo-provider-anthropic/index.ts
-import { definePlugin } from 'leo-agents'
-import { AnthropicProvider } from './provider.js'   // 实现 LlmProvider（见 8.3）
-
-export default definePlugin({
-  name: 'leo-provider-anthropic',
-  inject: ['providerKinds'],
-  async apply(ctx) {
-    await ctx.effect(() =>
-      ctx.get('providerKinds').register('anthropic', ({ id, config, apiKey }) =>
-        new AnthropicProvider({ id, baseURL: config.baseURL ?? 'https://api.anthropic.com', apiKey }),   // apiKey() 每次请求时取值
-      ),
-    )
-  },
-})
+throw Object.assign(new Error('Invalid API key'), { [Symbol.for('leo.error')]: true, code: 'auth', status: 401 })   // 不重试
+throw Object.assign(new Error('slow down'), { [Symbol.for('leo.error')]: true, code: 'rate_limit', retryAfterMs: 2000 })   // 按等待时间重试
 ```
 
-```jsonc
-// .leo/config.json
-{
-  "plugins": ["leo-provider-anthropic"],
-  "providers": { "claude": { "type": "anthropic", "apiKey": "$ANTHROPIC_API_KEY", "models": ["claude-sonnet-4-5"] } },
-  "model": "claude/claude-sonnet-4-5"
-}
-```
+### 8.2 默认模型
 
-工厂收到的 `apiKey()` 已经接好凭据服务（`--api-key`、`credentials.json`、`$ENV`、`!command`）。
-加载顺序是：核心插件 → 凭据服务 → `providerKinds` → 配置里的插件 → 配置声明的提供方，所以插件注册的类型一定在提供方创建前就绪。
-不想走配置的插件，也可以直接 `ctx.get('llm').registerProvider(provider)`，密钥用 `ctx.maybe('credentials')?.get({ id, envKeys })` 获取。
+`.leo/config.json` 的 `model` 优先；不写时用 `llm` 服务默认 provider 的 `defaultModel`（默认 provider 不可用时取第一个可用的）。
+`app.model`、`agentFactory.defaultModel` 每次读取时计算，供应商插件热加载 / 卸载后随之变化。
 
 ### 8.3 自定义 Provider
 
@@ -846,7 +796,7 @@ definePlugin({
   inject: ['context', 'llm'],
   async apply(ctx) {
     await ctx.effect(() =>
-      ctx.get('context').setCompactionStrategy(createSummarizingStrategy(ctx, { model: 'deepseek/deepseek-chat' })),
+      ctx.get('context').setCompactionStrategy(createSummarizingStrategy(ctx, { model: 'deepseek/deepseek-flash' })),
     )
   },
 })
@@ -1120,4 +1070,4 @@ expect(mock.requests[1].messages.at(-1).role).toBe('tool')  // 断言模型收�
 | `plugin/unloaded` | emit | `{ spec, name, reason: 'removed' \| 'changed' }` | 热卸载了插件 |
 | `plugin/failed` | emit | `{ spec, error }` | 热加载失败（changed 时已恢复旧版本） |
 
-可选服务（由 `createLeoFromConfig` / CLI 提供）：`credentials`（密钥查找）、`providerKinds`（提供方类型注册表）、`approval`（人工审批）。
+可选服务（由 `createLeoFromConfig` / CLI 提供）：`credentials`（密钥查找）、`leoConfig`（合并后的配置）、`leoPaths`、`agentFactory`、`approval`（人工审批）。模型供应商注册层插件提供 `providers`。
