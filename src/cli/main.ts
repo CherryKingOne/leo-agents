@@ -91,6 +91,9 @@ const CONFIG_TEMPLATE = `{
 `
 
 const NO_PROVIDER_HINT = '没有模型供应商插件。运行 leo plugin add provider && leo plugin add provider-deepseek，再 leo auth set deepseek'
+const NO_DRIVER_HINT = '还没有可用的模型：安装厂商子插件（如 leo plugin add provider-deepseek），或在 .leo/provider.json 里配置 OpenAI 兼容端点'
+/** 没有任何 provider 时的提示：区分“没装注册层”和“装了但没有驱动 / 配置” */
+const noProviderHint = (app: LeoApp) => (app.leo.ctx.has('providers' as never) ? NO_DRIVER_HINT : NO_PROVIDER_HINT)
 
 async function cmdInit(cwd: string): Promise<number> {
   const dir = join(cwd, '.leo')
@@ -269,7 +272,7 @@ async function cmdAuth(cwd: string, args: CliArgs): Promise<number> {
 async function cmdModels(cwd: string, args: CliArgs): Promise<number> {
   const app = await createLeoFromConfig({ cwd, ...(args.model ? { overrides: { model: args.model } } : {}) })
   try {
-    if (!app.providers.length) log(c.yellow(NO_PROVIDER_HINT))
+    if (!app.providers.length) log(c.yellow(noProviderHint(app)))
     for (const p of app.providers) {
       const mark = p.loaded ? c.green('●') : c.gray('○')
       log(`${mark} ${p.id.padEnd(12)} ${c.gray(p.name)}  ${p.loaded ? `默认模型 ${p.defaultModel ?? '(需指定)'}` : c.yellow(p.reason ?? '')}  ${c.gray(`密钥 ${p.credential.masked}${p.credential.source ? ` (${p.credential.source})` : ''}${p.via ? ` · ${p.via}` : ''}`)}`)
@@ -295,7 +298,7 @@ async function cmdDoctor(cwd: string, args: CliArgs): Promise<number> {
   log(`  用户目录    ${paths.userDir}`)
   log(`  已读取      ${loadedFiles.length ? loadedFiles.join(', ') : c.gray('(无配置文件，使用默认值)')}`)
   log(c.bold('提供方'))
-  if (!app.providers.length) log(`  ${c.yellow('无')} — ${NO_PROVIDER_HINT}`)
+  if (!app.providers.length) log(`  ${c.yellow('无')} — ${noProviderHint(app)}`)
   for (const p of app.providers) {
     log(`  ${p.loaded ? c.green('✓') : c.red('✗')} ${p.id.padEnd(12)} ${p.baseURL ?? ''} ${c.gray(`key=${p.credential.masked}${p.credential.source ? ` from ${p.credential.source}` : ''}${p.via ? ` · ${p.via}` : ''}`)} ${p.reason ? c.yellow(p.reason) : ''}`)
   }
@@ -340,7 +343,7 @@ async function cmdServe(cwd: string, args: CliArgs): Promise<number> {
   const approval = args.yes ? 'auto' : app.resolved.config.tools.approval
   log(c.gray(`leo ${version()} · serve · ${app.model ?? '(无默认模型)'} · 审批 ${approval}`))
   log(plugins.length ? `插件：${plugins.map((p) => p.name).join(', ')}` : c.yellow('没有加载任何插件：leo serve 只是让插件常驻，先用 leo plugin add <id> 安装，例如 leo plugin add gateway'))
-  if (!app.model) log(c.yellow(`还没有可用的模型：插件创建 Agent 时会失败。${app.providers.length ? '运行 leo auth set <provider> 配置密钥' : NO_PROVIDER_HINT}`))
+  if (!app.model) log(c.yellow(`还没有可用的模型：插件创建 Agent 时会失败。${app.providers.length ? '运行 leo auth set <provider> 配置密钥' : noProviderHint(app)}`))
   app.leo.ctx.on('plugin/loaded', ({ name, reason }) => log(c.gray(`[插件] ${reason === 'added' ? '已加载' : '已重新加载'} ${name}`)))
   app.leo.ctx.on('plugin/unloaded', ({ name }) => log(c.gray(`[插件] 已卸载 ${name}`)))
   app.leo.ctx.on('plugin/failed', ({ spec, error }) => log(c.red(`[插件] 加载失败 ${spec}：${error}`)))
@@ -523,7 +526,9 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
   }
   if (!app.model) {
     log(c.yellow('还没有可用的模型：'))
-    if (!app.providers.length) {
+    if (!app.providers.length && app.leo.ctx.has('providers' as never)) {
+      log(`  ${NO_DRIVER_HINT}`)
+    } else if (!app.providers.length) {
       log(`  1) ${c.bold('leo plugin add provider')}            安装模型供应商注册层`)
       log(`  2) ${c.bold('leo plugin add provider-deepseek')}   安装 DeepSeek 子插件（其他 OpenAI 兼容端点在 .leo/provider.json 里写 baseURL）`)
       log(`  3) ${c.bold('leo auth set deepseek')}              保存密钥（或 export DEEPSEEK_API_KEY=sk-...）`)

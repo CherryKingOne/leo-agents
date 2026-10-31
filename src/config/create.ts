@@ -46,6 +46,8 @@ declare module '../kernel/types.js' {
      * 和 0.1.x 写法的 `providers`
      */
     leoConfig: Readonly<LeoConfig>
+    /** 由 createLeoFromConfig / CLI 提供：密钥查找服务（模型供应商、网关等插件统一用它取密钥） */
+    credentials: CredentialService
   }
 }
 
