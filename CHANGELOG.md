@@ -1,6 +1,8 @@
 # 更新日志
 
-## 未发布（feat/provider-plugin 分支，计划 0.2.0）
+## 0.2.0 — 2026-10-31
+
+> 在 `feat/provider-plugin` 分支发布，未合并到 main。需要配合 leo-plugin 的 `provider` 与 `provider-deepseek` 插件使用。
 
 **破坏性变更：模型供应商插件化，底座不再内置任何模型厂商。**
 

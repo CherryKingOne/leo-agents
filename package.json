@@ -1,6 +1,6 @@
 {
   "name": "leo-agents",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "一切皆插件的可商用 TypeScript Agent 底座：插件内核 + 通用 Agent Loop + 开箱即用的 leo 命令行",
   "type": "module",
   "license": "Apache-2.0",
