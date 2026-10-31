@@ -1,6 +1,9 @@
 /**
  * 从 `.leo` 配置创建一个“开箱即用”的 leo 实例：
- *   核心插件 + 凭据服务 + 提供方插件 + 内置工具 + 审批策略 + 配置里声明的插件。
+ *   核心插件 + 凭据服务 + 内置工具 + 审批策略 + 配置里声明 / 已安装的插件。
+ *
+ * 底座不内置任何模型厂商：模型由模型供应商插件注册到 `llm` 服务
+ * （`leo plugin add provider && leo plugin add provider-deepseek`）。
  *
  * ```ts
  * const app = await createLeoFromConfig()          // 读取 ~/.leo 与 ./.leo
@@ -19,14 +22,12 @@ import type { Logger } from '../kernel/logger.js'
 import type { EventDef } from '../kernel/types.js'
 import { createLeo, type Leo } from '../leo.js'
 import type { Agent, AgentOptions } from '../loop/types.js'
-import { PROVIDER_PRESETS } from '../providers/catalog.js'
-import { providerKindsPlugin } from '../providers/kinds.js'
 import { approvalPolicy, builtinToolsPlugin } from '../tools/builtin.js'
 import type { ApprovalService } from '../tools/types.js'
 import { type LeoPaths, type LoadConfigOptions, loadConfig, type PluginRef, type ResolvedConfig } from './load.js'
 import { PluginHotReloader, type ReloadResult } from './hot-reload.js'
 import { type CredentialMap, type CredentialService, DefaultCredentialService } from './secrets.js'
-import { type ProviderConfig, ProviderConfigSchema } from './types.js'
+import type { LeoConfig } from './types.js'
 
 declare module '../kernel/types.js' {
   interface Services {
@@ -40,13 +41,18 @@ declare module '../kernel/types.js' {
      *   const agent = factory?.create({ sessionId, label: 'gateway:telegram' })
      */
     agentFactory: AgentFactory
+    /**
+     * 由 createLeoFromConfig 提供：合并后的 `.leo/config.json`（只读）。模型供应商插件用它读取默认模型 `model`
+     * 和 0.1.x 写法的 `providers`
+     */
+    leoConfig: Readonly<LeoConfig>
   }
 }
 
 /** 按宿主配置创建 Agent 的服务（见 `Services.agentFactory`） */
 export interface AgentFactory {
-  /** 默认模型（`provider/model`）；没有可用提供方时为 undefined，此时 create() 会抛 auth 错误 */
-  readonly defaultModel?: string
+  /** 默认模型（`provider/model`）；没有可用提供方时为 undefined，此时 create() 会抛 auth 错误。每次读取时计算 */
+  readonly defaultModel: string | undefined
   /** 宿主的默认系统提示词（含工作目录、日期），插件可在其后追加自己的说明 */
   systemPrompt(): string
   /** 以宿主默认值创建 Agent，传入的选项覆盖默认值（limits 逐项合并） */
@@ -98,23 +104,32 @@ declare module '../kernel/types.js' {
   }
 }
 
+/** 已注册到 `llm` 服务的模型提供方（`leo models` / `leo doctor` 展示） */
 export interface ProviderStatus {
   id: string
   name: string
-  type: string
   baseURL?: string
   defaultModel?: string
-  credential: ReturnType<CredentialService['describe']>
+  credential: { configured: boolean; masked: string; source?: string }
+  /** 可用（provider 没汇报状态时视为可用） */
   loaded: boolean
   reason?: string
+  /** 由哪个插件 / 驱动提供 */
+  via?: string
+  /** 是 llm 服务的默认 provider */
+  default: boolean
 }
 
 export interface LeoApp {
   leo: Leo
   resolved: ResolvedConfig
-  /** 默认模型（`provider/model`），无可用提供方时为 undefined */
-  model?: string
-  providers: ProviderStatus[]
+  /**
+   * 默认模型（`provider/model`），无可用提供方时为 undefined。
+   * 每次读取时计算：模型供应商插件热加载 / 卸载后随之变化
+   */
+  readonly model: string | undefined
+  /** 当前注册到 llm 服务的提供方（每次读取时计算） */
+  readonly providers: ProviderStatus[]
   credentials: CredentialService
   /** 按配置默认值创建 Agent，可覆盖任意选项 */
   createAgent(opts?: Partial<AgentOptions>): Agent
@@ -224,73 +239,53 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
     opts.env ?? process.env,
   )
 
-  // —— 决定要加载哪些提供方：配置中显式声明的 + 检测到密钥的内置预设 ——
-  const providerConfigs = new Map<string, ProviderConfig>()
-  for (const [id, pc] of Object.entries(config.providers)) providerConfigs.set(id, pc)
-  for (const id of Object.keys(PROVIDER_PRESETS)) {
-    if (providerConfigs.has(id) || PROVIDER_PRESETS[id]!.keyless) continue
-    const desc = credentials.describe({ id, envKeys: PROVIDER_PRESETS[id]!.envKeys })
-    if (desc.configured) providerConfigs.set(id, ProviderConfigSchema.parse({}))
-  }
-  const statuses: ProviderStatus[] = []
-  for (const [id, pc] of providerConfigs) {
-    const preset = PROVIDER_PRESETS[id]
-    const lookup = { id, ...(pc.apiKey ? { configured: pc.apiKey } : {}), envKeys: [...(pc.apiKeyEnv ? [pc.apiKeyEnv] : []), ...(preset?.envKeys ?? [])] }
-    let credential: ProviderStatus['credential']
-    try {
-      credential = credentials.describe(lookup)
-    } catch (err) {
-      credential = { configured: false, masked: `(error: ${(err as Error).message})` }
-    }
-    const firstModel = pc.models?.[0]
-    const defaultModel = (typeof firstModel === 'string' ? firstModel : firstModel?.id) ?? preset?.defaultModel
-    const baseURL = pc.baseURL ?? preset?.baseURL
-    let loaded = pc.enabled
-    let reason: string | undefined
-    if (!pc.enabled) reason = 'disabled'
-    else if (!credential.configured && preset && !preset.keyless) {
-      loaded = false
-      reason = 'no API key'
-    }
-    statuses.push({
-      id,
-      name: preset?.name ?? id,
-      type: pc.type,
-      ...(baseURL ? { baseURL } : {}),
-      ...(defaultModel ? { defaultModel } : {}),
-      credential,
-      loaded,
-      ...(reason ? { reason } : {}),
+  // —— 模型提供方：全部来自插件（llm 服务），这里只负责读状态和挑默认模型 ——
+  let llmRef: (() => import('../llm/types.js').LlmService | undefined) = () => undefined
+  const providerStatuses = (): ProviderStatus[] => {
+    const llm = llmRef()
+    if (!llm) return []
+    const def = (() => {
+      try {
+        return llm.resolve('').provider.id
+      } catch {
+        return undefined
+      }
+    })()
+    return llm.providers().map((p) => {
+      let st: ReturnType<NonNullable<typeof p.status>> | undefined
+      try {
+        st = p.status?.()
+      } catch (err) {
+        st = { ready: false, reason: (err as Error).message }
+      }
+      let credential = st?.credential
+      if (!credential) {
+        try {
+          credential = credentials.describe({ id: p.id })
+        } catch (err) {
+          credential = { configured: false, masked: `(error: ${(err as Error).message})` }
+        }
+      }
+      return {
+        id: p.id,
+        name: p.name ?? p.id,
+        ...(st?.baseURL ? { baseURL: st.baseURL } : {}),
+        ...(p.defaultModel ? { defaultModel: p.defaultModel } : {}),
+        credential,
+        loaded: st?.ready ?? true,
+        ...(st?.reason ? { reason: st.reason } : {}),
+        ...(st?.via ? { via: st.via } : {}),
+        default: p.id === def,
+      }
     })
   }
-
-  // —— 默认模型 ——
-  const loadedProviders = statuses.filter((s) => s.loaded)
-  let model = config.model
-  if (!model) {
-    const p = loadedProviders.find((s) => s.defaultModel)
-    if (p) model = `${p.id}/${p.defaultModel}`
+  /** 配置的 model 优先；否则默认 provider（不可用时取第一个可用的）的默认模型 */
+  const currentModel = (): string | undefined => {
+    if (config.model) return config.model
+    const list = providerStatuses().filter((s) => s.loaded && s.defaultModel)
+    const p = list.find((s) => s.default) ?? list[0]
+    return p ? `${p.id}/${p.defaultModel}` : undefined
   }
-  const defaultProviderId = model?.includes('/') ? model.slice(0, model.indexOf('/')) : loadedProviders[0]?.id
-
-  // —— 组装插件 ——
-  const configured = definePlugin({
-    name: 'leo:configured-providers',
-    inject: ['llm', 'providerKinds'],
-    async apply(ctx) {
-      for (const s of loadedProviders) {
-        const pc = providerConfigs.get(s.id)!
-        const factory = ctx.get('providerKinds').get(pc.type)
-        if (!factory) {
-          throw new LeoError('plugin_unresolved', `Provider "${s.id}" uses type "${pc.type}" but no plugin registered it (known: ${ctx.get('providerKinds').kinds().join(', ')})`)
-        }
-        const preset = PROVIDER_PRESETS[s.id]
-        const lookup = { id: s.id, ...(pc.apiKey ? { configured: pc.apiKey } : {}), envKeys: [...(pc.apiKeyEnv ? [pc.apiKeyEnv] : []), ...(preset?.envKeys ?? [])] }
-        const provider = factory({ id: s.id, config: pc, apiKey: () => ctx.get('credentials').get(lookup) })
-        await ctx.effect(() => ctx.get('llm').registerProvider(provider, { default: s.id === defaultProviderId }))
-      }
-    },
-  })
 
   const searchDirs = [...new Set([...(paths.projectDir ? [paths.projectDir] : []), base, paths.userDir])]
   // 用户级配置里的包优先从 ~/.leo 解析
@@ -315,9 +310,12 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
   const fullPrompt = () => `${basePrompt}\n\nWorking directory: ${workspace}\nToday: ${new Date().toISOString().slice(0, 10)}`
   /** 宿主默认值 + 覆盖项 → AgentOptions（createAgent 与 agentFactory 共用） */
   const agentOptions = (o: Partial<AgentOptions> = {}): AgentOptions => {
-    const m = o.model ?? model
+    const m = o.model ?? currentModel()
     if (!m) {
-      throw new LeoError('auth', 'No model available. Configure a provider key: `leo auth set deepseek` (or export DEEPSEEK_API_KEY), or set "model" in .leo/config.json.')
+      throw new LeoError(
+        'auth',
+        'No model available. Install a model provider plugin and set its key: `leo plugin add provider && leo plugin add provider-deepseek`, then `leo auth set deepseek` (or export DEEPSEEK_API_KEY).',
+      )
     }
     const limits = {
       ...(a.maxSteps ? { maxSteps: a.maxSteps } : {}),
@@ -339,7 +337,9 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
     name: 'leo:agent-factory',
     apply: (ctx) =>
       void ctx.provide('agentFactory', {
-        ...(model ? { defaultModel: model } : {}),
+        get defaultModel() {
+          return currentModel()
+        },
         systemPrompt: fullPrompt,
         create: (o) => ctx.get('agentLoop').create(agentOptions(o)),
       }),
@@ -356,10 +356,9 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
     ...(opts.onNotice ? [definePlugin({ name: 'leo:notice', apply: (ctx) => void ctx.on('plugin/notice', (n) => opts.onNotice!(n)) })] : []),
     definePlugin({ name: 'leo:paths', apply: (ctx) => void ctx.provide('leoPaths', Object.freeze({ ...paths })) }),
     definePlugin({ name: 'leo:credentials', apply: (ctx) => void ctx.provide('credentials', credentials) }),
+    definePlugin({ name: 'leo:config', apply: (ctx) => void ctx.provide('leoConfig', Object.freeze({ ...config })) }),
     agentFactoryPlugin,
-    providerKindsPlugin,
     userPluginSlot,
-    configured,
     ...(tools.builtin === false
       ? []
       : [
@@ -385,6 +384,7 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
     context: config.context,
     plugins,
   })
+  llmRef = () => leo.ctx.maybe('llm')
   reloader.setLogger(leo.kernel.logger.child({ plugin: 'leo:hot-reload' }))
   reloader.start(
     // 热加载：直接挂到根作用域；加载失败时清理掉残留的 failed 运行时，避免影响之后的加载
@@ -404,8 +404,12 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
   return {
     leo,
     resolved,
-    ...(model ? { model } : {}),
-    providers: statuses,
+    get model() {
+      return currentModel()
+    },
+    get providers() {
+      return providerStatuses()
+    },
     credentials,
     createAgent: (o = {}) => leo.createAgent(agentOptions(o)),
     reloadPlugins: () => reloader.reload(),

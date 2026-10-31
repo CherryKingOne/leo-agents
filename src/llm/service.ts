@@ -1,6 +1,6 @@
 import { LeoError } from '../errors.js'
 import type { Context } from '../kernel/context.js'
-import { definePlugin } from '../kernel/plugin.js'
+import { definePlugin, type PluginDefinition } from '../kernel/plugin.js'
 import type { Disposer, EventDef } from '../kernel/types.js'
 import type { LlmProvider, LlmRequest, LlmService, LlmStreamEvent, ResolvedModel, StreamOptions } from './types.js'
 
@@ -93,3 +93,18 @@ export const llmPlugin = definePlugin({
     ctx.provide('llm', new DefaultLlmService(ctx))
   },
 })
+
+/**
+ * 把一个 LlmProvider 实例包装成插件：加载即注册到 `llm` 服务，卸载即撤销。
+ * 具体厂商（DeepSeek、OpenAI 兼容端点……）不在底座里，由模型供应商插件（leo-plugin 的 provider / provider-*）提供；
+ * 代码里自己实现了 LlmProvider 时用它挂上去：`createLeo({ plugins: [providerPlugin(myProvider, { default: true })] })`
+ */
+export function providerPlugin(provider: LlmProvider, opts: { default?: boolean } = {}): PluginDefinition {
+  return definePlugin({
+    name: `leo:provider:${provider.id}`,
+    inject: ['llm'],
+    apply(ctx) {
+      void ctx.effect(() => ctx.get('llm').registerProvider(provider, opts))
+    },
+  })
+}

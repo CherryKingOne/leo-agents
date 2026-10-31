@@ -4,8 +4,7 @@ import { type Context, Kernel, type PluginRuntime } from './kernel/context.js'
 import { createConsoleLogger, type Logger, type LogLevel } from './kernel/logger.js'
 import type { PluginLike } from './kernel/plugin.js'
 import type { Scope } from './kernel/types.js'
-import { llmPlugin } from './llm/service.js'
-import { providerPlugin } from './providers/plugin.js'
+import { llmPlugin, providerPlugin } from './llm/service.js'
 import type { LlmProvider } from './llm/types.js'
 import { agentLoopPlugin } from './loop/service.js'
 import type { Agent, AgentOptions } from './loop/types.js'
@@ -24,7 +23,7 @@ export interface CreateLeoOptions {
   context?: TokenBudgetOptions
   /**
    * 要注册的模型提供方实例，第一个为默认（等价于 `plugins: [providerPlugin(p)]`）。
-   * 推荐直接用提供方插件：`plugins: [deepseek(), openaiCompatible({...})]`
+   * 底座不内置任何厂商：用模型供应商插件（leo-plugin 的 provider + provider-deepseek 等），或自己实现 LlmProvider
    */
   providers?: LlmProvider[]
   /** 额外插件，按顺序加载；可以用 [plugin, config] 传配置 */
@@ -50,7 +49,9 @@ export interface Leo {
  * 创建一个 leo 实例：内核 + 核心插件（sessions / llm / tools / context / agentLoop）+ 你的插件。
  *
  * ```ts
- * const leo = await createLeo({ plugins: [deepseek(), weatherPlugin] })   // deepseek() 读取 DEEPSEEK_API_KEY
+ * import provider from 'leo-plugin-provider'
+ * import deepseek from 'leo-plugin-provider-deepseek'
+ * const leo = await createLeo({ plugins: [provider, deepseek, weatherPlugin] })   // 读取 DEEPSEEK_API_KEY
  * const agent = leo.createAgent({ model: 'deepseek/deepseek-chat', systemPrompt: '你是一个助手' })
  * for await (const ev of agent.prompt('北京天气如何？')) { ... }
  * ```

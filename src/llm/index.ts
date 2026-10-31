@@ -1,5 +1,3 @@
 export * from './types.js'
 export * from './service.js'
-export * from './providers/openai.js'
 export * from './providers/mock.js'
-export { parseSSE } from './providers/sse.js'

@@ -13,7 +13,6 @@ import { maskSecret, readCredentialFile, writeCredential } from '../config/secre
 import { LeoError } from '../errors.js'
 import type { Agent, AgentEvent } from '../loop/types.js'
 import { textOf } from '../protocol/messages.js'
-import { PROVIDER_PRESETS } from '../providers/catalog.js'
 import type { ApprovalService } from '../tools/types.js'
 import { type CliArgs, HELP, parseArgs } from './args.js'
 import { addPlugin, DEFAULT_PLUGIN_REGISTRY, defaultIo, initPlugin, loadRegistry, uninstallPlugin } from './plugin.js'
@@ -66,16 +65,14 @@ async function main(argv: string[]): Promise<number> {
 // —— leo init ——————————————————————————————————————————————————————————
 const CONFIG_TEMPLATE = `{
   // leo 项目配置。完整说明见 docs/development-guide.md「.leo 配置」一节
-  // 默认模型：<provider>/<model>
-  "model": "deepseek/deepseek-chat",
+  // 默认模型：<provider>/<model>。不写时用模型供应商插件的默认模型
+  // "model": "deepseek/deepseek-chat",
 
-  // 提供方：内置预设（deepseek/openai/qwen/moonshot/zhipu/siliconflow/openrouter/ollama）只需写要覆盖的字段；
-  // 任何 OpenAI 兼容端点（vLLM、SGLang、公司网关……）写 baseURL 即可。
-  // 密钥不要写在这里：用 \`leo auth set <provider>\` 存到 credentials.json，或写 "$ENV_NAME" / "!command"。
-  "providers": {
-    "deepseek": {}
-    // "vllm": { "baseURL": "http://localhost:8000/v1", "models": ["Qwen/Qwen3-32B"] }
-  },
+  // 模型供应商由插件提供，底座不内置任何厂商：
+  //   leo plugin add provider            注册层（自带通用 OpenAI 兼容协议，配置在 .leo/provider.json）
+  //   leo plugin add provider-deepseek   DeepSeek 子插件
+  //   leo auth set deepseek              密钥存到 credentials.json（或 export DEEPSEEK_API_KEY）
+  // 0.1.x 的 "providers": { ... } 写法仍然有效，由 provider 插件读取。
 
   // 第三方或自定义插件：npm 包名或相对路径；也会自动加载 .leo/plugins/ 下的 .js/.mjs/.ts
   "plugins": [],
@@ -93,6 +90,8 @@ const CONFIG_TEMPLATE = `{
 }
 `
 
+const NO_PROVIDER_HINT = '没有模型供应商插件。运行 leo plugin add provider && leo plugin add provider-deepseek，再 leo auth set deepseek'
+
 async function cmdInit(cwd: string): Promise<number> {
   const dir = join(cwd, '.leo')
   await mkdir(join(dir, 'plugins'), { recursive: true })
@@ -108,22 +107,22 @@ async function cmdInit(cwd: string): Promise<number> {
 
   if (process.stdin.isTTY) {
     const app = await createLeoFromConfig({ cwd }).catch(() => undefined)
-    const hasKey = app?.providers.some((p) => p.loaded)
+    const hasProvider = Boolean(app?.providers.length)
+    const hasModel = Boolean(app?.model)
     await app?.dispose()
-    if (!hasKey) {
+    if (!hasProvider) {
+      log(c.yellow('\n还没有模型供应商插件。先安装：'))
+      log(`  ${c.bold('leo plugin add provider')}            模型供应商注册层`)
+      log(`  ${c.bold('leo plugin add provider-deepseek')}   DeepSeek 子插件`)
+    }
+    if (!hasModel) {
       const rl = makeRl()
       try {
-        const provider = (await rl.question(`选择提供方 ${c.gray(`(${Object.keys(PROVIDER_PRESETS).join('/')})`)} [deepseek]: `)).trim() || 'deepseek'
-        if (!PROVIDER_PRESETS[provider]?.keyless) {
-          const key = await askSecret(rl, `${provider} API Key（留空跳过）: `)
-          if (key) {
-            await writeCredential(join(dir, 'credentials.json'), provider, key)
-            log(`${c.green('已保存')} 密钥到 .leo/credentials.json（权限 600，已加入 .gitignore）`)
-          }
-        }
-        if (provider !== 'deepseek') {
-          const text = (await readFile(cfg, 'utf8')).replace('"deepseek/deepseek-chat"', `"${provider}/${PROVIDER_PRESETS[provider]?.defaultModel ?? '<model>'}"`).replace('"deepseek": {}', `"${provider}": {}`)
-          await writeFile(cfg, text, 'utf8')
+        const provider = (await rl.question(`为哪个提供方保存密钥 ${c.gray('(provider id，留空跳过)')} [deepseek]: `)).trim() || 'deepseek'
+        const key = await askSecret(rl, `${provider} API Key（留空跳过）: `)
+        if (key) {
+          await writeCredential(join(dir, 'credentials.json'), provider, key)
+          log(`${c.green('已保存')} 密钥到 .leo/credentials.json（权限 600，已加入 .gitignore）`)
         }
       } finally {
         rl.close()
@@ -262,9 +261,7 @@ async function cmdAuth(cwd: string, args: CliArgs): Promise<number> {
   }
   await writeCredential(target, provider, key)
   log(`${c.green('已保存')} ${provider} → ${target}（权限 600）`)
-  if (!PROVIDER_PRESETS[provider] && !resolved.config.providers[provider]) {
-    log(c.yellow(`提示："${provider}" 不是内置提供方，请在 .leo/config.json 的 providers 中配置 baseURL`))
-  }
+  log(c.gray(`提示：模型由插件提供。还没装的话：leo plugin add provider && leo plugin add provider-${provider}（没有对应子插件时在 .leo/provider.json 里配置 baseURL）`))
   return 0
 }
 
@@ -272,10 +269,10 @@ async function cmdAuth(cwd: string, args: CliArgs): Promise<number> {
 async function cmdModels(cwd: string, args: CliArgs): Promise<number> {
   const app = await createLeoFromConfig({ cwd, ...(args.model ? { overrides: { model: args.model } } : {}) })
   try {
-    if (!app.providers.length) log(c.yellow('没有配置任何提供方。运行 leo auth set deepseek 或设置 DEEPSEEK_API_KEY'))
+    if (!app.providers.length) log(c.yellow(NO_PROVIDER_HINT))
     for (const p of app.providers) {
       const mark = p.loaded ? c.green('●') : c.gray('○')
-      log(`${mark} ${p.id.padEnd(12)} ${c.gray(p.name)}  ${p.loaded ? `默认模型 ${p.defaultModel ?? '(需指定)'}` : c.yellow(p.reason ?? '')}  ${c.gray(`密钥 ${p.credential.masked}${p.credential.source ? ` (${p.credential.source})` : ''}`)}`)
+      log(`${mark} ${p.id.padEnd(12)} ${c.gray(p.name)}  ${p.loaded ? `默认模型 ${p.defaultModel ?? '(需指定)'}` : c.yellow(p.reason ?? '')}  ${c.gray(`密钥 ${p.credential.masked}${p.credential.source ? ` (${p.credential.source})` : ''}${p.via ? ` · ${p.via}` : ''}`)}`)
     }
     log(`\n当前默认：${app.model ? c.bold(app.model) : c.yellow('(无)')}`)
     return 0
@@ -298,9 +295,9 @@ async function cmdDoctor(cwd: string, args: CliArgs): Promise<number> {
   log(`  用户目录    ${paths.userDir}`)
   log(`  已读取      ${loadedFiles.length ? loadedFiles.join(', ') : c.gray('(无配置文件，使用默认值)')}`)
   log(c.bold('提供方'))
-  if (!app.providers.length) log(`  ${c.yellow('无')} — 运行 leo auth set deepseek 或设置 DEEPSEEK_API_KEY`)
+  if (!app.providers.length) log(`  ${c.yellow('无')} — ${NO_PROVIDER_HINT}`)
   for (const p of app.providers) {
-    log(`  ${p.loaded ? c.green('✓') : c.red('✗')} ${p.id.padEnd(12)} ${p.baseURL ?? ''} ${c.gray(`key=${p.credential.masked}${p.credential.source ? ` from ${p.credential.source}` : ''}`)} ${p.reason ? c.yellow(p.reason) : ''}`)
+    log(`  ${p.loaded ? c.green('✓') : c.red('✗')} ${p.id.padEnd(12)} ${p.baseURL ?? ''} ${c.gray(`key=${p.credential.masked}${p.credential.source ? ` from ${p.credential.source}` : ''}${p.via ? ` · ${p.via}` : ''}`)} ${p.reason ? c.yellow(p.reason) : ''}`)
   }
   log(`  默认模型    ${app.model ?? c.yellow('(无)')}`)
   log(c.bold('插件'))
@@ -343,7 +340,7 @@ async function cmdServe(cwd: string, args: CliArgs): Promise<number> {
   const approval = args.yes ? 'auto' : app.resolved.config.tools.approval
   log(c.gray(`leo ${version()} · serve · ${app.model ?? '(无默认模型)'} · 审批 ${approval}`))
   log(plugins.length ? `插件：${plugins.map((p) => p.name).join(', ')}` : c.yellow('没有加载任何插件：leo serve 只是让插件常驻，先用 leo plugin add <id> 安装，例如 leo plugin add gateway'))
-  if (!app.model) log(c.yellow('还没有可用的模型：插件创建 Agent 时会失败。运行 leo auth set <provider> 配置密钥'))
+  if (!app.model) log(c.yellow(`还没有可用的模型：插件创建 Agent 时会失败。${app.providers.length ? '运行 leo auth set <provider> 配置密钥' : NO_PROVIDER_HINT}`))
   app.leo.ctx.on('plugin/loaded', ({ name, reason }) => log(c.gray(`[插件] ${reason === 'added' ? '已加载' : '已重新加载'} ${name}`)))
   app.leo.ctx.on('plugin/unloaded', ({ name }) => log(c.gray(`[插件] 已卸载 ${name}`)))
   app.leo.ctx.on('plugin/failed', ({ spec, error }) => log(c.red(`[插件] 加载失败 ${spec}：${error}`)))
@@ -525,10 +522,15 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
     app.leo.ctx.on('plugin/failed', ({ spec, error }) => log(c.yellow(`\n[插件] 加载失败 ${spec}：${error}`)))
   }
   if (!app.model) {
-    log(c.yellow('还没有可用的模型。三选一：'))
-    log(`  1) ${c.bold('leo auth set deepseek')}            保存密钥（其他：openai / qwen / moonshot / zhipu / siliconflow / openrouter）`)
-    log(`  2) ${c.bold('export DEEPSEEK_API_KEY=sk-...')}   使用环境变量`)
-    log(`  3) ${c.bold('leo init')}                         在项目中创建 .leo/config.json，配置任意 OpenAI 兼容端点`)
+    log(c.yellow('还没有可用的模型：'))
+    if (!app.providers.length) {
+      log(`  1) ${c.bold('leo plugin add provider')}            安装模型供应商注册层`)
+      log(`  2) ${c.bold('leo plugin add provider-deepseek')}   安装 DeepSeek 子插件（其他 OpenAI 兼容端点在 .leo/provider.json 里写 baseURL）`)
+      log(`  3) ${c.bold('leo auth set deepseek')}              保存密钥（或 export DEEPSEEK_API_KEY=sk-...）`)
+    } else {
+      for (const p of app.providers) log(`  ${p.id}: ${p.reason ?? '不可用'}`)
+      log(`  运行 ${c.bold('leo auth set <provider>')} 保存密钥，或 ${c.bold('leo doctor')} 查看详情`)
+    }
     rl?.close()
     await app.dispose()
     return 1

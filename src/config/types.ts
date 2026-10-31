@@ -1,39 +1,14 @@
 /**
  * `.leo/config.json` 的结构（项目级）与 `~/.leo/config.json`（用户级）。项目配置覆盖用户配置。
- * 所有字段都可选：不写配置文件也能运行（自动探测已配置密钥的提供方）。
+ * 所有字段都可选。模型供应商由插件提供（leo plugin add provider / provider-deepseek），底座本身不内置任何厂商。
  */
 import { z } from 'zod'
 
-const modelInfo = z.object({
-  id: z.string(),
-  contextWindow: z.number().int().positive(),
-  maxOutputTokens: z.number().int().positive().optional(),
-  pricing: z
-    .object({ inputPerMTok: z.number(), outputPerMTok: z.number(), cachedInputPerMTok: z.number().optional() })
-    .optional(),
-})
-
-export const ProviderConfigSchema = z
-  .object({
-    /** 协议，目前内置 `openai-compatible`；其他值需由插件处理（见 `config/providerKinds`） */
-    type: z.string().default('openai-compatible'),
-    /** false 时不加载 */
-    enabled: z.boolean().default(true),
-    baseURL: z.string().optional(),
-    /** 密钥：`$ENV_NAME` / `!command` / 字面值（不推荐把字面值提交到仓库，用 credentials.json） */
-    apiKey: z.string().optional(),
-    /** 回退环境变量名 */
-    apiKeyEnv: z.string().optional(),
-    headers: z.record(z.string(), z.string()).optional(),
-    /** 模型元信息：字符串只声明 id（上下文窗口按默认值） */
-    models: z.array(z.union([z.string(), modelInfo])).optional(),
-    maxTokensField: z.enum(['max_tokens', 'max_completion_tokens']).optional(),
-    sendReasoning: z.boolean().optional(),
-    connectTimeoutMs: z.number().int().positive().optional(),
-    idleTimeoutMs: z.number().int().positive().optional(),
-  })
-  .passthrough()
-
+/**
+ * `providers.<id>`：0.1.x 的模型供应商写法。底座不再解析它，原样交给模型供应商插件（leo-plugin 的 provider）读取，
+ * 所以旧配置装上插件后照常生效。新写法见插件的 `provider.json`
+ */
+export const ProviderConfigSchema = z.record(z.string(), z.unknown())
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>
 
 /** 插件条目：`"./.leo/plugins/x.js"`、`"leo-plugin-foo"`、`["leo-plugin-foo", { ...config }]` */
@@ -42,9 +17,9 @@ export const PluginEntrySchema = z.union([z.string(), z.tuple([z.string(), z.unk
 export const LeoConfigSchema = z
   .object({
     $schema: z.string().optional(),
-    /** 默认模型：`providerId/modelId` */
+    /** 默认模型：`providerId/modelId`。不写时用默认 provider 的默认模型（由模型供应商插件决定） */
     model: z.string().optional(),
-    /** 提供方：key 为 provider id。内置预设（deepseek/openai/qwen/...）只需写需要覆盖的字段 */
+    /** 0.1.x 写法的模型供应商配置，底座不解析，由模型供应商插件读取（见 ProviderConfigSchema） */
     providers: z.record(z.string(), ProviderConfigSchema).default({}),
     /** 额外插件（按顺序加载）。相对路径相对于该配置文件所在的 .leo 目录的上级（项目根） */
     plugins: z.array(PluginEntrySchema).default([]),
