@@ -14,7 +14,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { appendFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { addPluginEntry, listPluginEntries, removePluginEntry } from '../config/jsonc.js'
@@ -33,6 +33,8 @@ export interface RegistryEntry {
   bundle?: { url: string; sha256?: string }
   /** `--init` 时写进 scope 目录的配置文件模板 */
   init?: { files: InitFile[] }
+  /** `remove --purge` 时额外清理的内容：credentials 是 credentials.json 里的键，以 `/` 结尾表示前缀（如 `gateway/qq/`） */
+  purge?: { credentials?: string[] }
 }
 
 export interface InitFile {
@@ -211,6 +213,37 @@ async function manifestInit(pkgDir: string): Promise<{ id: string; init?: { file
   }
 }
 
+/** 读取 npm 包自带的 leo-plugin.json 里的 purge */
+async function manifestPurge(pkgDir: string): Promise<{ credentials?: string[] } | undefined> {
+  try {
+    const m = JSON.parse(await readFile(join(pkgDir, 'leo-plugin.json'), 'utf8')) as { purge?: { credentials?: unknown } }
+    const list = Array.isArray(m.purge?.credentials) ? m.purge.credentials.filter((k): k is string => typeof k === 'string' && k.length > 0) : []
+    return list.length ? { credentials: list } : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 从 credentials.json 删除插件留下的凭据（`/` 结尾的项按前缀匹配），其他键原样保留 */
+async function purgeCredentialKeys(file: string, keys: string[], io: PluginIo): Promise<void> {
+  const text = await readFile(file, 'utf8').catch(() => '')
+  if (!text.trim()) return
+  let data: Record<string, unknown>
+  try {
+    data = JSON.parse(text) as Record<string, unknown>
+  } catch {
+    io.log(`跳过清理凭据：${file} 不是合法 JSON`)
+    return
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return
+  const hit = Object.keys(data).filter((k) => keys.some((p) => (p.endsWith('/') ? k.startsWith(p) : k === p)))
+  if (!hit.length) return
+  for (const k of hit) delete data[k]
+  await writeFile(file, `${JSON.stringify(data, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+  await chmod(file, 0o600).catch(() => {})
+  io.log(`已从 ${file} 删除凭据：${hit.join(', ')}`)
+}
+
 /** 目标路径必须留在 scope 目录内 */
 function safeTarget(scopeDir: string, path: string): string {
   const target = resolve(scopeDir, normalize(path))
@@ -353,6 +386,8 @@ export async function removePlugin(o: RemoveOptions, io: PluginIo, known?: Regis
     ? ((await manifestInit(join(o.scopeDir, 'node_modules', pkg)))?.init?.files ?? entry?.init?.files ?? []).map((f) => f.path)
     : []
 
+  const purgeCredentials = o.purge ? ((await manifestPurge(join(o.scopeDir, 'node_modules', pkg)))?.credentials ?? entry?.purge?.credentials ?? []) : []
+
   const file = bundleFile(o.scopeDir, id)
   if (existsSync(file)) {
     await rm(file)
@@ -380,6 +415,7 @@ export async function removePlugin(o: RemoveOptions, io: PluginIo, known?: Regis
         io.log(`已删除配置文件 ${target}`)
       }
     }
+    if (purgeCredentials.length) await purgeCredentialKeys(join(o.scopeDir, 'credentials.json'), purgeCredentials, io)
   }
   if (!removed) io.log(`没有找到已安装的 "${o.name}"（${o.scopeDir}）`)
   return removed

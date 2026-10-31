@@ -112,7 +112,7 @@ describe('插件解析', () => {
 })
 
 describe('leo plugin add / remove', () => {
-  async function fixture(opts: { sha?: string; status?: string; init?: unknown } = {}) {
+  async function fixture(opts: { sha?: string; status?: string; init?: unknown; purge?: unknown } = {}) {
     const root = await tmp()
     const bundle = Buffer.from(PLUGIN_SRC)
     const sha = createHash('sha256').update(bundle).digest('hex')
@@ -123,7 +123,7 @@ describe('leo plugin add / remove', () => {
       JSON.stringify({
         version: 1,
         plugins: [
-          { id: 'hello', package: 'leo-plugin-hello', version: '1.0.0', status: opts.status ?? 'experimental', description: 'd', leo: '>=0.1.0', bundle: { url: 'hello.bundle.js', sha256: opts.sha ?? sha }, ...(opts.init ? { init: opts.init } : {}) },
+          { id: 'hello', package: 'leo-plugin-hello', version: '1.0.0', status: opts.status ?? 'experimental', description: 'd', leo: '>=0.1.0', bundle: { url: 'hello.bundle.js', sha256: opts.sha ?? sha }, ...(opts.init ? { init: opts.init } : {}), ...(opts.purge ? { purge: opts.purge } : {}) },
           { id: 'future', package: 'leo-plugin-future', version: '0.0.0', status: 'planned', description: 'd' },
         ],
       }),
@@ -333,6 +333,22 @@ describe('leo plugin add / remove', () => {
     await addPlugin({ name: 'hello', scopeDir: home, npm: false, registry: f.registry, leoVersion: '0.1.0' }, f.io)
     await uninstallPlugin({ ...base, purge: true }, f.io)
     expect(existsSync(join(home, 'hello.json'))).toBe(false)
+  })
+
+  it('--purge 按 purge.credentials 清理 credentials.json 里的键（/ 结尾为前缀），其他键保留', async () => {
+    const f = await fixture({ purge: { credentials: ['gateway/qq/', 'hello/token'] } })
+    const home = join(f.root, 'home')
+    const creds = join(home, 'credentials.json')
+    const base = { name: 'hello', registry: f.registry, userDir: home, scope: 'global' as const }
+    const seed = { openai: 'sk-1', 'gateway/qq/appId': '1', 'gateway/qq/appSecret': 's', 'gateway/qq2/appId': '2', 'hello/token': 't', 'hello/tokenx': 'x' }
+    await addPlugin({ name: 'hello', scopeDir: home, npm: false, registry: f.registry, leoVersion: '0.1.0' }, f.io)
+    await writeFile(creds, JSON.stringify(seed))
+    await uninstallPlugin(base, f.io)
+    expect(JSON.parse(await readFile(creds, 'utf8'))).toEqual(seed)
+    await addPlugin({ name: 'hello', scopeDir: home, npm: false, registry: f.registry, leoVersion: '0.1.0' }, f.io)
+    await uninstallPlugin({ ...base, purge: true }, f.io)
+    expect(JSON.parse(await readFile(creds, 'utf8'))).toEqual({ openai: 'sk-1', 'gateway/qq2/appId': '2', 'hello/tokenx': 'x' })
+    expect(f.logs.some((l) => l.includes('删除凭据') && l.includes('gateway/qq/appId'))).toBe(true)
   })
 
 })
