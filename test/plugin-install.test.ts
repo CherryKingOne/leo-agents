@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { addPlugin, type PluginIo, removePlugin } from '../src/cli/plugin.js'
+import { addPlugin, initPlugin, type PluginIo, removePlugin } from '../src/cli/plugin.js'
+import { parseArgs } from '../src/cli/args.js'
 import { addPluginEntry, listPluginEntries, removePluginEntry } from '../src/config/jsonc.js'
 import { createLeoFromConfig, resolvePluginPackage } from '../src/index.js'
 import { setup } from './helpers.js'
@@ -110,7 +111,7 @@ describe('插件解析', () => {
 })
 
 describe('leo plugin add / remove', () => {
-  async function fixture(opts: { sha?: string; status?: string } = {}) {
+  async function fixture(opts: { sha?: string; status?: string; init?: unknown } = {}) {
     const root = await tmp()
     const bundle = Buffer.from(PLUGIN_SRC)
     const sha = createHash('sha256').update(bundle).digest('hex')
@@ -121,7 +122,7 @@ describe('leo plugin add / remove', () => {
       JSON.stringify({
         version: 1,
         plugins: [
-          { id: 'hello', package: 'leo-plugin-hello', version: '1.0.0', status: opts.status ?? 'experimental', description: 'd', leo: '>=0.1.0', bundle: { url: 'hello.bundle.js', sha256: opts.sha ?? sha } },
+          { id: 'hello', package: 'leo-plugin-hello', version: '1.0.0', status: opts.status ?? 'experimental', description: 'd', leo: '>=0.1.0', bundle: { url: 'hello.bundle.js', sha256: opts.sha ?? sha }, ...(opts.init ? { init: opts.init } : {}) },
           { id: 'future', package: 'leo-plugin-future', version: '0.0.0', status: 'planned', description: 'd' },
         ],
       }),
@@ -197,4 +198,95 @@ describe('leo plugin add / remove', () => {
     expect(f.npmCalls[0]?.at(-1)).toBe('@acme/leo-tools')
     expect(listPluginEntries(await readFile(join(scopeDir, 'config.json'), 'utf8'))).toEqual(['@acme/leo-tools'])
   })
+
+  it('全局与项目各装一份时只加载一次，项目的那份生效', async () => {
+    const f = await fixture()
+    const home = join(f.root, 'home')
+    await addPlugin({ name: 'hello', scopeDir: home, npm: false, registry: f.registry, leoVersion: '0.1.0' }, f.io)
+    await addPlugin({ name: 'hello', scopeDir: join(f.root, '.leo'), projectRoot: f.root, npm: false, registry: f.registry, leoVersion: '0.1.0' }, f.io)
+    // 全局配置里给全局那份写了选项：项目那份生效时沿用
+    await writeFile(join(home, 'config.json'), JSON.stringify({ plugins: [['./plugins/hello.bundle.js', { n: 1 }]] }))
+    const { loadConfig } = await import('../src/config/load.js')
+    const r = await loadConfig({ cwd: f.root, userDir: home, env: {} })
+    const hellos = r.plugins.filter((p) => p.spec.endsWith('hello.bundle.js'))
+    expect(hellos).toHaveLength(1)
+    expect(hellos[0]!.spec).toBe(join(f.root, '.leo', 'plugins', 'hello.bundle.js'))
+    expect(hellos[0]!.config).toEqual({ n: 1 })
+    const app = await createLeoFromConfig({ cwd: f.root, userDir: home, env: {}, overrides: { tools: { builtin: false } } })
+    expect(app.leo.ctx.has('hello' as never)).toBe(true)
+    await app.dispose()
+  })
+
+  it('只装在全局时，任何项目里都会加载', async () => {
+    const f = await fixture()
+    const home = join(f.root, 'home')
+    await addPlugin({ name: 'hello', scopeDir: home, npm: false, registry: f.registry, leoVersion: '0.1.0' }, f.io)
+    const other = join(f.root, 'other-project')
+    await mkdir(join(other, '.leo'), { recursive: true })
+    const app = await createLeoFromConfig({ cwd: other, userDir: home, env: {}, overrides: { tools: { builtin: false } } })
+    expect(app.leo.ctx.has('hello' as never)).toBe(true)
+    await app.dispose()
+  })
+
+  it('--init 用插件自带模板初始化配置文件（url 校验 sha256、内联内容、子目录），已存在的不覆盖', async () => {
+    const tpl = '{\n  "mcpServers": {}\n}\n'
+    const f0 = await fixture()
+    await writeFile(join(f0.root, 'reg', 'servers.json'), tpl)
+    const sha = createHash('sha256').update(tpl).digest('hex')
+    const f = await fixture({
+      init: {
+        files: [
+          { path: 'hello-servers.json', url: 'servers.json', sha256: sha, description: '服务器列表' },
+          { path: 'agents/reviewer.md', content: '# reviewer\n' },
+        ],
+      },
+    })
+    await writeFile(join(f.root, 'reg', 'servers.json'), tpl)
+    const home = join(f.root, 'home')
+    await addPlugin({ name: 'hello', scopeDir: home, npm: false, registry: f.registry, leoVersion: '0.1.0', init: true }, f.io)
+    expect(await readFile(join(home, 'hello-servers.json'), 'utf8')).toBe(tpl)
+    expect(await readFile(join(home, 'agents', 'reviewer.md'), 'utf8')).toBe('# reviewer\n')
+
+    await writeFile(join(home, 'hello-servers.json'), '{"mine":true}')
+    await initPlugin({ name: 'hello', scopeDir: home, registry: f.registry, from: true, force: false }, f.io)
+    expect(await readFile(join(home, 'hello-servers.json'), 'utf8')).toBe('{"mine":true}')
+    expect(f.logs.some((l) => l.includes('已存在，保留'))).toBe(true)
+    await initPlugin({ name: 'hello', scopeDir: home, registry: f.registry, from: true, force: true }, f.io)
+    expect(await readFile(join(home, 'hello-servers.json'), 'utf8')).toBe(tpl)
+  })
+
+  it('模板 sha256 不符、路径越界时拒绝', async () => {
+    const f = await fixture({ init: { files: [{ path: 'x.json', content: '{}', sha256: 'bad' }] } })
+    await expect(initPlugin({ name: 'hello', scopeDir: join(f.root, 'home'), registry: f.registry, from: true, force: false }, f.io)).rejects.toThrow(/校验失败/)
+    const g = await fixture({ init: { files: [{ path: '../escape.json', content: '{}' }] } })
+    await expect(initPlugin({ name: 'hello', scopeDir: join(g.root, 'home'), registry: g.registry, from: true, force: false }, g.io)).rejects.toThrow(/不合法/)
+  })
+
+  it('--init-from 使用用户提供的模板目录或单个文件', async () => {
+    const f = await fixture({ init: { files: [{ path: 'hello-servers.json', content: '{}' }] } })
+    const mine = join(f.root, 'my-templates')
+    await mkdir(join(mine, 'agents'), { recursive: true })
+    await writeFile(join(mine, 'hello-servers.json'), '{"a":1}')
+    await writeFile(join(mine, 'agents', 'a.md'), 'A')
+    const proj = join(f.root, '.leo')
+    await addPlugin({ name: 'hello', scopeDir: proj, projectRoot: f.root, npm: false, registry: f.registry, leoVersion: '0.1.0', init: mine }, f.io)
+    expect(await readFile(join(proj, 'hello-servers.json'), 'utf8')).toBe('{"a":1}')
+    expect(await readFile(join(proj, 'agents', 'a.md'), 'utf8')).toBe('A')
+
+    // 单个文件：放到插件声明的唯一配置文件位置
+    await writeFile(join(f.root, 'custom.jsonc'), '{"b":2}')
+    await initPlugin({ name: 'hello', scopeDir: join(f.root, 'home'), registry: f.registry, from: join(f.root, 'custom.jsonc'), force: false }, f.io)
+    expect(await readFile(join(f.root, 'home', 'hello-servers.json'), 'utf8')).toBe('{"b":2}')
+  })
 })
+
+describe('leo plugin 参数', () => {
+  it('默认全局；--project / --local / -l 指向项目；--init-from 隐含 --init', () => {
+    expect(parseArgs(['plugin', 'add', 'mcp']).project).toBe(false)
+    for (const flag of ['--project', '--local', '-l']) expect(parseArgs(['plugin', 'add', 'mcp', flag]).project).toBe(true)
+    const a = parseArgs(['plugin', 'add', 'mcp', '--init-from', './t', '--force'])
+    expect(a).toMatchObject({ init: true, initFrom: './t', force: true, positionals: ['add', 'mcp'] })
+    expect(parseArgs(['plugin', 'add', 'mcp', '-g']).global).toBe(true)
+  })
+})
+

@@ -4,13 +4,17 @@
  * 两种安装形态：
  *   - bundle（默认）：下载插件的单文件构建产物到 `<scope>/plugins/<id>.bundle.js`，被自动发现加载，校验 sha256
  *   - npm（--npm）：`npm install --prefix <scope> <package>`，并把包名写进 `<scope>/config.json` 的 plugins
- * scope 为项目 `.leo/`（默认）或用户 `~/.leo/`（--global）。
+ * scope 默认为用户 `~/.leo/`（全局，所有项目可用）；`--project` 装到当前项目的 `.leo/`，
+ * 同一插件在两处都装时项目里的优先。
+ *
+ * 初始化（--init / --init-from <path>）：把插件声明的配置文件模板写进 scope 目录，
+ * 例如 mcp 的 `mcp-servers.json`，装完即可直接编辑使用；已存在的文件不覆盖（--force 才覆盖）。
  */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { appendFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { addPluginEntry, listPluginEntries, removePluginEntry } from '../config/jsonc.js'
 
@@ -26,6 +30,20 @@ export interface RegistryEntry {
   /** 兼容的 leo-agents 版本范围（目前只识别 ">=x.y.z"） */
   leo?: string
   bundle?: { url: string; sha256?: string }
+  /** `--init` 时写进 scope 目录的配置文件模板 */
+  init?: { files: InitFile[] }
+}
+
+export interface InitFile {
+  /** 相对 scope 目录（`~/.leo/` 或 `<project>/.leo/`）的目标路径，如 `mcp-servers.json`、`agents/reviewer.md` */
+  path: string
+  /** 模板地址（相对地址以仓库文件为基准）；与 content 二选一 */
+  url?: string
+  sha256?: string
+  /** 内联模板内容 */
+  content?: string
+  /** 说明，安装时打印 */
+  description?: string
 }
 
 export interface Registry {
@@ -111,6 +129,10 @@ export interface AddOptions {
   npm: boolean
   registry: string
   leoVersion: string
+  /** 安装后初始化插件的配置文件：true 用插件自带模板，字符串为用户提供的模板目录或文件 */
+  init?: boolean | string
+  /** 初始化时覆盖已存在的文件 */
+  force?: boolean
 }
 
 export async function addPlugin(o: AddOptions, io: PluginIo): Promise<void> {
@@ -149,8 +171,9 @@ export async function addPlugin(o: AddOptions, io: PluginIo): Promise<void> {
     const file = bundleFile(o.scopeDir, entry.id)
     await mkdir(dirname(file), { recursive: true })
     await writeFile(file, bytes)
-    io.log(`已安装 ${entry.id}@${entry.version} → ${file}（自动加载，使用默认配置）`)
-    io.log(`要修改配置，在 ${join(o.scopeDir, 'config.json')} 的 plugins 中写：["./${o.projectRoot ? '.leo/' : ''}plugins/${entry.id}.bundle.js", { ... }]`)
+    io.log(`已安装 ${entry.id}@${entry.version} → ${file}（${o.projectRoot ? '当前项目' : '全局，所有项目可用'}，自动加载）`)
+    if (o.init) await initFiles({ entry, scopeDir: o.scopeDir, registry: o.registry, from: o.init, force: !!o.force }, io)
+    io.log(`要修改插件选项，在 ${join(o.scopeDir, 'config.json')} 的 plugins 中写：["./${o.projectRoot ? '.leo/' : ''}plugins/${entry.id}.bundle.js", { ... }]`)
     return
   }
 
@@ -164,7 +187,129 @@ export async function addPlugin(o: AddOptions, io: PluginIo): Promise<void> {
   const pkgName = pkg.replace(/@[^@/]+$/, '') || pkg
   await writeFile(cfg, addPluginEntry(text, pkgName), 'utf8')
   if (o.projectRoot) await ensureGitignore(o.projectRoot, ['.leo/node_modules/'])
-  io.log(`已安装 ${pkgName}，并加入 ${cfg} 的 plugins`)
+  io.log(`已安装 ${pkgName}（${o.projectRoot ? '当前项目' : '全局，所有项目可用'}），并加入 ${cfg} 的 plugins`)
+  if (o.init) {
+    const local = await manifestInit(join(o.scopeDir, 'node_modules', pkgName))
+    await initFiles({ entry: local ?? entry, scopeDir: o.scopeDir, registry: o.registry, from: o.init, force: !!o.force }, io)
+  }
+}
+
+// —— 初始化配置文件 ——————————————————————————————————————————————————————
+
+/** 读取 npm 包自带的 leo-plugin.json 里的 init（模板路径相对包目录） */
+async function manifestInit(pkgDir: string): Promise<{ id: string; init?: { files: InitFile[] } } | undefined> {
+  try {
+    const m = JSON.parse(await readFile(join(pkgDir, 'leo-plugin.json'), 'utf8')) as { id?: string; init?: { files?: (InitFile & { template?: string })[] } }
+    if (!m.init?.files?.length) return undefined
+    return {
+      id: m.id ?? pkgDir,
+      init: { files: m.init.files.map((f) => ({ ...f, ...(f.template && !f.url && f.content === undefined ? { url: join(pkgDir, f.template) } : {}) })) },
+    }
+  } catch {
+    return undefined
+  }
+}
+
+/** 目标路径必须留在 scope 目录内 */
+function safeTarget(scopeDir: string, path: string): string {
+  const target = resolve(scopeDir, normalize(path))
+  const rel = relative(resolve(scopeDir), target)
+  if (!rel || rel.startsWith('..') || isAbsolute(rel) || isAbsolute(path)) throw new Error(`初始化文件路径不合法：${path}（必须是 .leo 内的相对路径）`)
+  return target
+}
+
+async function listFiles(dir: string): Promise<string[]> {
+  const out: string[] = []
+  for (const e of await readdir(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name)
+    if (e.isDirectory()) out.push(...(await listFiles(p)).map((f) => join(e.name, f)))
+    else if (e.isFile()) out.push(e.name)
+  }
+  return out
+}
+
+export interface InitOptions {
+  entry: { id: string; init?: { files: InitFile[] } } | undefined
+  scopeDir: string
+  registry: string
+  /** true：插件自带模板；字符串：用户提供的模板目录（按相对路径复制）或单个文件 */
+  from: boolean | string
+  force: boolean
+}
+
+/** 把插件的配置文件模板写进 scope 目录。返回写入的文件 */
+export async function initFiles(o: InitOptions, io: PluginIo): Promise<string[]> {
+  const declared = o.entry?.init?.files ?? []
+  const jobs: { path: string; load: () => Promise<Uint8Array>; sha256?: string; description?: string }[] = []
+
+  if (typeof o.from === 'string') {
+    const src = resolve(o.from)
+    const st = await stat(src).catch(() => undefined)
+    if (!st) throw new Error(`找不到模板：${o.from}`)
+    if (st.isDirectory()) {
+      for (const f of await listFiles(src)) jobs.push({ path: f.split(sep).join('/'), load: () => readFile(join(src, f)) })
+    } else {
+      // 单个文件：写到插件声明的唯一配置文件位置；插件没声明或声明了多个时按文件名放
+      const name = src.split(sep).pop()!
+      const target = declared.length === 1 ? declared[0]!.path : (declared.find((d) => d.path.split('/').pop() === name)?.path ?? name)
+      jobs.push({ path: target, load: () => readFile(src) })
+    }
+  } else {
+    if (!declared.length) {
+      io.log(`插件 "${o.entry?.id ?? '?'}" 没有需要初始化的配置文件`)
+      return []
+    }
+    for (const f of declared) {
+      if (f.content !== undefined) jobs.push({ path: f.path, load: async () => new TextEncoder().encode(f.content!), ...(f.sha256 ? { sha256: f.sha256 } : {}), ...(f.description ? { description: f.description } : {}) })
+      else if (f.url) {
+        const url = resolveLocation(f.url, o.registry)
+        jobs.push({ path: f.path, load: () => io.fetchBytes(url), ...(f.sha256 ? { sha256: f.sha256 } : {}), ...(f.description ? { description: f.description } : {}) })
+      } else throw new Error(`初始化文件 ${f.path} 缺少 url 或 content`)
+    }
+  }
+
+  const written: string[] = []
+  for (const job of jobs) {
+    const target = safeTarget(o.scopeDir, job.path)
+    if (existsSync(target) && !o.force) {
+      io.log(`  已存在，保留：${target}（--force 覆盖）`)
+      continue
+    }
+    const bytes = await job.load()
+    if (job.sha256) {
+      const got = createHash('sha256').update(bytes).digest('hex')
+      if (got !== job.sha256.toLowerCase()) throw new Error(`模板 ${job.path} 校验失败：sha256 应为 ${job.sha256}，实际为 ${got}`)
+    }
+    await mkdir(dirname(target), { recursive: true })
+    await writeFile(target, bytes)
+    written.push(target)
+    io.log(`  已初始化 ${target}${job.description ? `：${job.description}` : ''}`)
+  }
+  return written
+}
+
+export interface InitPluginOptions {
+  name: string
+  scopeDir: string
+  registry: string
+  from: boolean | string
+  force: boolean
+}
+
+/** `leo plugin init <id>`：给已安装（或尚未安装）的插件初始化配置文件 */
+export async function initPlugin(o: InitPluginOptions, io: PluginIo): Promise<string[]> {
+  let entry: RegistryEntry | { id: string; init?: { files: InitFile[] } } | undefined
+  try {
+    entry = findEntry(await loadRegistry(o.registry, io), o.name)
+  } catch (err) {
+    if (o.from === true) throw err
+  }
+  if (!entry) {
+    const local = await manifestInit(join(o.scopeDir, 'node_modules', o.name))
+    if (local) entry = local
+  }
+  if (!entry && o.from === true) throw new Error(`找不到插件 "${o.name}" 的配置模板`)
+  return initFiles({ entry: entry ?? { id: o.name }, scopeDir: o.scopeDir, registry: o.registry, from: o.from, force: o.force }, io)
 }
 
 export interface RemoveOptions {

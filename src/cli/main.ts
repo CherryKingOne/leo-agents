@@ -16,7 +16,7 @@ import { textOf } from '../protocol/messages.js'
 import { PROVIDER_PRESETS } from '../providers/catalog.js'
 import type { ApprovalService } from '../tools/types.js'
 import { type CliArgs, HELP, parseArgs } from './args.js'
-import { addPlugin, DEFAULT_PLUGIN_REGISTRY, defaultIo, loadRegistry, removePlugin } from './plugin.js'
+import { addPlugin, DEFAULT_PLUGIN_REGISTRY, defaultIo, initPlugin, loadRegistry, removePlugin } from './plugin.js'
 import { runApiServer } from '../api/server.js'
 import { askSecret, c, makeRl, oneLine, readStdin } from './ui.js'
 
@@ -142,30 +142,53 @@ async function cmdPlugin(cwd: string, args: CliArgs): Promise<number> {
   const registry = args.registry ?? process.env.LEO_PLUGIN_REGISTRY ?? DEFAULT_PLUGIN_REGISTRY
   const io = defaultIo(log)
   const { paths } = resolved
-  const projectRoot = args.global ? undefined : (paths.projectRoot ?? cwd)
-  const scopeDir = args.global ? paths.userDir : (paths.projectDir ?? join(cwd, '.leo'))
+  if (args.global && args.project) return void log(c.red('-g 与 --project 不能同时使用')), 2
+  // 默认全局（~/.leo）；--project 才装到当前项目。-g 仍可写，等同默认
+  const project = args.project
+  const projectRoot = project ? (paths.projectRoot ?? cwd) : undefined
+  const scopeDir = project ? (paths.projectDir ?? join(cwd, '.leo')) : paths.userDir
+  const init = args.initFrom ?? (args.init ? true : undefined)
   try {
     if (sub === 'add' || sub === 'install' || sub === 'i') {
-      if (!name) return void log(c.red('用法：leo plugin add <id> [-g] [--npm]')), 2
-      await addPlugin({ name, scopeDir, ...(projectRoot ? { projectRoot } : {}), npm: args.npm, registry, leoVersion: version() }, io)
+      if (!name) return void log(c.red('用法：leo plugin add <id> [--project] [--init | --init-from <path>] [--npm]')), 2
+      await addPlugin(
+        { name, scopeDir, ...(projectRoot ? { projectRoot } : {}), npm: args.npm, registry, leoVersion: version(), ...(init !== undefined ? { init } : {}), force: args.force },
+        io,
+      )
+      if (!init) log(c.gray(`提示：加 --init 可把插件的配置文件模板初始化到 ${scopeDir}（或运行 leo plugin init ${name}${project ? ' --project' : ''}）`))
+      return 0
+    }
+    if (sub === 'init') {
+      if (!name) return void log(c.red('用法：leo plugin init <id> [--project] [--init-from <path>] [--force]')), 2
+      log(`初始化 ${name} 的配置文件 → ${scopeDir}`)
+      await initPlugin({ name, scopeDir, registry, from: args.initFrom ?? true, force: args.force }, io)
       return 0
     }
     if (sub === 'remove' || sub === 'rm' || sub === 'uninstall') {
-      if (!name) return void log(c.red('用法：leo plugin remove <id> [-g]')), 2
-      return (await removePlugin({ name, scopeDir, registry }, io)) ? 0 : 1
+      if (!name) return void log(c.red('用法：leo plugin remove <id> [--project]')), 2
+      const ok = await removePlugin({ name, scopeDir, registry }, io)
+      if (!ok && !project && paths.projectDir) log(c.gray(`当前项目里的安装请用：leo plugin remove ${name} --project`))
+      return ok ? 0 : 1
     }
     if (sub === 'list' || sub === 'ls') {
+      const scopeOf = (p: { spec: string; from: string }) =>
+        paths.projectDir && (p.from.startsWith(paths.projectDir) || p.spec.startsWith(paths.projectDir) || (paths.projectConfig && p.from === paths.projectConfig))
+          ? '项目'
+          : p.from === 'overrides'
+            ? '参数'
+            : '全局'
       log(c.bold('已安装'))
       if (!resolved.plugins.length) log(c.gray('  （无）'))
-      for (const p of resolved.plugins) log(`  ${p.spec} ${c.gray(`(${p.from})`)}`)
+      for (const p of resolved.plugins) log(`  ${c.cyan(`[${scopeOf(p)}]`)} ${p.spec} ${c.gray(`(${p.from})`)}`)
       try {
         const reg = await loadRegistry(registry, io)
         log(`\n${c.bold('插件仓库')} ${c.gray(registry)}`)
-        const installed = resolved.plugins.map((p) => p.spec)
         for (const e of reg.plugins) {
-          const mark = installed.some((s) => s === e.package || s.endsWith(`/${e.id}.bundle.js`)) ? c.green(' 已安装') : ''
+          const hit = resolved.plugins.find((p) => p.spec === e.package || p.spec.endsWith(`/${e.id}.bundle.js`) || p.spec.endsWith(`\\${e.id}.bundle.js`))
+          const mark = hit ? c.green(` 已安装（${scopeOf(hit)}）`) : ''
           const status = e.status === 'stable' ? '' : c.yellow(` [${e.status}]`)
-          log(`  ${c.bold(e.id)} ${e.version}${status}${mark}  ${c.gray(e.description)}`)
+          const initMark = e.init?.files?.length ? c.gray(' [--init]') : ''
+          log(`  ${c.bold(e.id)} ${e.version}${status}${initMark}${mark}  ${c.gray(e.description)}`)
         }
       } catch (e) {
         log(c.yellow(`\n${(e as Error).message}`))
@@ -173,7 +196,7 @@ async function cmdPlugin(cwd: string, args: CliArgs): Promise<number> {
       return 0
     }
     log(c.red(`未知子命令：${sub}`))
-    log('用法：leo plugin list | add <id> | remove <id>')
+    log('用法：leo plugin list | add <id> | init <id> | remove <id>')
     return 2
   } catch (e) {
     log(c.red(`✗ ${(e as Error).message}`))

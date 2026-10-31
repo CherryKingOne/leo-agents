@@ -17,7 +17,7 @@
 import { existsSync, statSync } from 'node:fs'
 import { readdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { LeoError } from '../errors.js'
 import { type CredentialMap, readCredentialFile } from './secrets.js'
 import { type LeoConfig, type LeoConfigInput, LeoConfigSchema } from './types.js'
@@ -165,12 +165,26 @@ export async function loadConfig(opts: LoadConfigOptions = {}): Promise<Resolved
     ...(paths.projectDir ? await discoverPluginDir(join(paths.projectDir, 'plugins')) : []),
     ...pluginRefs(opts.overrides as Record<string, unknown> | undefined, cwd, 'overrides'),
   ]
-  // 同一模块只加载一次：显式声明（可带 config）优先于目录自动发现
+  // 同一插件只加载一次：
+  //   - 同一模块：显式声明（可带 config）优先于目录自动发现
+  //   - 全局与项目各装了一份（plugins/ 目录里同名的文件，如 mcp.bundle.js）：项目的那份生效，
+  //     位置保持在先出现处；配置优先用项目里写的，项目没写时沿用全局的
+  const userPluginDir = join(userDir, 'plugins')
+  const projectPluginDir = paths.projectDir ? join(paths.projectDir, 'plugins') : undefined
+  const bundleKey = (spec: string): string | undefined => {
+    const dir = dirname(spec)
+    return dir === userPluginDir || dir === projectPluginDir ? `plugins/${basename(spec)}` : undefined
+  }
   const plugins: PluginRef[] = []
   for (const ref of all) {
-    const i = plugins.findIndex((p) => p.spec === ref.spec)
+    const key = bundleKey(ref.spec)
+    const i = plugins.findIndex((p) => p.spec === ref.spec || (key !== undefined && bundleKey(p.spec) === key))
     if (i < 0) plugins.push(ref)
-    else if (ref.config !== undefined && plugins[i]!.config === undefined) plugins[i] = ref
+    else if (plugins[i]!.spec !== ref.spec) {
+      // 项目覆盖全局（all 中项目层排在全局之后）
+      const config = ref.config ?? plugins[i]!.config
+      plugins[i] = { ...ref, ...(config !== undefined ? { config } : {}) }
+    } else if (ref.config !== undefined && plugins[i]!.config === undefined) plugins[i] = ref
   }
 
   let merged: Record<string, unknown> = {}

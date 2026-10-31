@@ -370,17 +370,28 @@ console.log(leo.describe())
 ### 4.7 用 `leo plugin` 安装插件
 
 ```bash
-leo plugin list                     # 已安装的插件 + 官方插件仓库
-leo plugin add sub-agents           # 下载单文件到 .leo/plugins/sub-agents.bundle.js（校验 sha256），自动加载
-leo plugin add sub-agents -g        # 装到 ~/.leo/plugins/，所有项目可用
-leo plugin add sub-agents --npm     # npm install --prefix .leo，并把包名写进 .leo/config.json 的 plugins
-leo plugin add @acme/x --npm        # 仓库外的任意 npm 包
-leo plugin remove sub-agents [-g]   # 删除单文件 / 从配置移除并 npm uninstall
+leo plugin list                          # 已安装的插件（标注 全局 / 项目）+ 官方插件仓库
+leo plugin add mcp                       # 默认全局：下载单文件到 ~/.leo/plugins/mcp.bundle.js（校验 sha256），所有项目可用
+leo plugin add mcp --init                # 同时把插件的配置文件模板初始化到 ~/.leo/（如 ~/.leo/mcp-servers.json）
+leo plugin add mcp --project --init      # 只装到当前项目：.leo/plugins/ 与 .leo/mcp-servers.json（--local / -l 同义）
+leo plugin add mcp --init-from ./tpl     # 用你自己的模板目录（按相对路径复制进 .leo/）或单个文件
+leo plugin init mcp [--project] [--force]  # 已装好的插件补做初始化；已存在的文件默认保留，--force 覆盖
+leo plugin add sub-agents --npm          # npm install --prefix ~/.leo，并把包名写进 ~/.leo/config.json 的 plugins
+leo plugin add @acme/x --npm --project   # 仓库外的任意 npm 包，装到项目
+leo plugin remove mcp [--project]        # 默认移除全局安装；--project 移除项目里的
 ```
 
+- **默认全局安装**到 `~/.leo/`（`LEO_HOME` 可改位置），在任何项目里运行 `leo` 都会加载；`--project` 才装进当前项目的 `.leo/`
+  （当前目录及上级都没有 `.leo/` 时会在当前目录创建）。`-g` 仍可写，等同默认。
+- **加载规则**：全局 `~/.leo/plugins/`、`~/.leo/config.json` 与项目 `.leo/plugins/`、`.leo/config.json` 里的插件都会加载。
+  同一插件两处都装（`plugins/` 里同名文件，或 config 里同一包名）时只加载一次，**项目的那份生效**；
+  项目没写插件选项时沿用全局 config 里写的。
+- **初始化**：插件在清单 `leo-plugin.json` 的 `init.files` 里声明配置文件模板（目标路径相对 `.leo/`），
+  发布时模板随 bundle 一起上传，registry 条目带上 `init.files[].url` 与 `sha256`。`--init` 按 scope 写进 `~/.leo/` 或项目 `.leo/`，
+  校验 sha256，路径不能越出 `.leo/`，已存在的文件不覆盖。npm 安装的包读取包内 `leo-plugin.json` 的 `init.files[].template`。
 - 插件仓库默认是官方仓库 `https://raw.githubusercontent.com/CherryKingOne/leo-plugin/main/registry.json`，
   可用 `--registry <url|路径>` 或环境变量 `LEO_PLUGIN_REGISTRY` 指向镜像或私有仓库。
-- 仓库条目格式见 leo-plugin 仓库的 `schemas/registry.schema.json`；`bundle.url` 可写相对地址（相对仓库文件）。
+- 仓库条目格式见 leo-plugin 仓库的 `schemas/registry.schema.json`；`bundle.url`、`init.files[].url` 可写相对地址（相对仓库文件）。
 - npm 包按顺序在 **项目 `.leo/` → 项目根 → `~/.leo/`** 的 `node_modules` 中解析（用户级配置里的包先查 `~/.leo/`），
   支持只有 `import` 条件的纯 ESM 包。
 - 写配置时只改 `plugins` 数组，保留文件里的注释与格式。

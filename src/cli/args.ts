@@ -20,6 +20,9 @@ export interface CliArgs {
   global: boolean
   npm: boolean
   registry?: string
+  init: boolean
+  initFrom?: string
+  force: boolean
   host?: string
   port?: number
   token?: string
@@ -29,7 +32,7 @@ export interface CliArgs {
 const COMMANDS = new Set(['run', 'chat', 'init', 'auth', 'models', 'doctor', 'plugin', 'plugins', 'api', 'help', 'version'])
 
 export function parseArgs(argv: string[]): CliArgs {
-  const a: CliArgs = { positionals: [], print: false, yes: false, continue: false, json: false, noTools: false, project: false, reasoning: false, help: false, version: false, global: false, npm: false }
+  const a: CliArgs = { positionals: [], print: false, yes: false, continue: false, json: false, noTools: false, project: false, reasoning: false, help: false, version: false, global: false, npm: false, init: false, force: false }
   const rest: string[] = []
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i]!
@@ -49,12 +52,15 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--provider': a.provider = val(); break
       case '--json': a.json = true; break
       case '--no-tools': a.noTools = true; break
-      case '--project': a.project = true; break
+      case '--project': case '--local': case '-l': a.project = true; break
       case '--reasoning': a.reasoning = true; break
       case '--max-steps': a.maxSteps = Number(val()); break
       case '-g': case '--global': a.global = true; break
       case '--npm': a.npm = true; break
       case '--registry': a.registry = val(); break
+      case '--init': a.init = true; break
+      case '--init-from': a.initFrom = val(); a.init = true; break
+      case '--force': a.force = true; break
       case '--host': a.host = val(); break
       case '--port': a.port = Number(val()); break
       case '--token': a.token = val(); break
@@ -86,9 +92,13 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
   leo auth list | remove <provider>
   leo models                  查看可用的提供方与默认模型
   leo doctor                  诊断：配置文件、密钥来源、插件、会话目录
-  leo plugin list             查看已安装的插件与官方插件仓库
-  leo plugin add <id> [-g] [--npm]      安装插件（默认下载单文件到 .leo/plugins/，-g 装到 ~/.leo，--npm 用 npm 安装）
-  leo plugin remove <id> [-g]           移除插件
+  leo plugin list             查看已安装的插件（全局 / 当前项目）与官方插件仓库
+  leo plugin add <id> [--project] [--init | --init-from <path>] [--npm]
+                              安装插件。默认全局安装到 ~/.leo（所有项目可用）；--project 装到当前项目 .leo/；
+                              --init 同时把插件的配置文件模板初始化到对应 .leo/，--init-from 用你提供的模板目录或文件
+  leo plugin init <id> [--project] [--init-from <path>] [--force]
+                              给插件初始化配置文件（已存在的文件默认保留）
+  leo plugin remove <id> [--project]    移除插件（默认移除全局安装）
   leo api [--host 127.0.0.1] [--port 8765] [--token <t>]
                               以 HTTP API 服务方式启动（Python 服务 + 常驻 leo，插件一直在线），不进入对话
 
@@ -104,6 +114,7 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
       --max-steps <n>         单次任务最多模型调用次数
       --cwd <dir>             工作目录
       --registry <url|path>   插件仓库地址（默认官方仓库，也可用 LEO_PLUGIN_REGISTRY）
+  -l, --project, --local      leo plugin / leo auth 作用于当前项目的 .leo/（默认 ~/.leo）
       --host / --port         leo api 监听地址（默认 127.0.0.1:8765，也可用 LEO_API_HOST / LEO_API_PORT）
       --token <t>             leo api 访问令牌（也可用 LEO_API_TOKEN）；监听非本机地址时建议设置
       --python <ver|bin>      leo api 的 Python（默认由 uv 管理 3.12；也可 LEO_UV 指定 uv）

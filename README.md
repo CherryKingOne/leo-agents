@@ -19,7 +19,7 @@ leo auth set deepseek            # 保存密钥到 ~/.leo/credentials.json（或
 cd your-project && leo           # 交互式 Agent：读写文件、搜索、执行命令、抓网页（写入/执行前会询问）
 leo -p -y "跑测试，失败就修"       # 一次性执行
 leo init                         # 在项目里创建 .leo/config.json，配置模型、插件、工具、预算
-leo plugin add sub-agents        # 从官方插件仓库安装插件（leo plugin list 查看全部）
+leo plugin add mcp --init        # 全局安装插件并初始化配置文件（--project 只装到当前项目；leo plugin list 查看全部）
 leo api                          # 以 HTTP API 服务启动（不进入对话），插件常驻在线，见 docs/api.md
 ```
 
