@@ -23,6 +23,7 @@ import { providerKindsPlugin } from '../providers/kinds.js'
 import { approvalPolicy, builtinToolsPlugin } from '../tools/builtin.js'
 import type { ApprovalService } from '../tools/types.js'
 import { type LeoPaths, type LoadConfigOptions, loadConfig, type PluginRef, type ResolvedConfig } from './load.js'
+import { PluginHotReloader, type ReloadResult } from './hot-reload.js'
 import { type CredentialMap, type CredentialService, DefaultCredentialService } from './secrets.js'
 import { type ProviderConfig, ProviderConfigSchema } from './types.js'
 
@@ -48,6 +49,13 @@ export interface CreateFromConfigOptions extends LoadConfigOptions {
   /** 代码传入的额外插件（在配置插件之后加载） */
   plugins?: (PluginLike | [PluginLike, unknown])[]
   logger?: Logger
+  /**
+   * 插件热加载（默认开启）：运行中感知 ~/.leo 与项目 .leo 里插件的安装、移除、更新，以及插件 `watch` 的数据文件变化，
+   * 不需要重启。设为 false 关闭
+   */
+  watchPlugins?: boolean
+  /** 热加载的轮询兜底间隔（毫秒），默认 3000，0 关闭；测试里可调小 */
+  pluginPollMs?: number
 }
 
 export interface ProviderStatus {
@@ -70,6 +78,10 @@ export interface LeoApp {
   credentials: CredentialService
   /** 按配置默认值创建 Agent，可覆盖任意选项 */
   createAgent(opts?: Partial<AgentOptions>): Agent
+  /** 立即重新扫描插件并应用变化（热加载开启时也会自动进行） */
+  reloadPlugins(): Promise<ReloadResult>
+  /** 当前加载的配置插件 */
+  loadedPlugins(): { spec: string; name: string; from: string }[]
   dispose(): Promise<void>
 }
 
@@ -133,7 +145,7 @@ export function resolvePluginPackage(spec: string, dirs: string[]): string | und
  * npm 包依次在 searchDirs 中解析（createLeoFromConfig 传入：项目 .leo、项目根、用户 ~/.leo），
  * 所以 `leo plugin add --npm` 装到 .leo/node_modules 或 ~/.leo/node_modules 的包都能找到
  */
-export async function importPlugin(ref: PluginRef, searchDirs: string | string[]): Promise<PluginLike> {
+export async function importPlugin(ref: PluginRef, searchDirs: string | string[], version?: string): Promise<PluginLike> {
   const dirs = Array.isArray(searchDirs) ? searchDirs : [searchDirs]
   let url: string
   if (isAbsolute(ref.spec)) url = pathToFileURL(ref.spec).href
@@ -141,6 +153,8 @@ export async function importPlugin(ref: PluginRef, searchDirs: string | string[]
     const entry = resolvePluginPackage(ref.spec, dirs)
     url = entry ? pathToFileURL(entry).href : ref.spec // 交给 ESM 解析
   }
+  // 热重载：同一文件改动后用新的查询串绕过 ESM 模块缓存
+  if (version && url.startsWith('file:')) url += `?v=${encodeURIComponent(version)}`
   let mod: Record<string, unknown>
   try {
     mod = (await import(url)) as Record<string, unknown>
@@ -238,13 +252,22 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
     },
   })
 
-  const userPlugins: [PluginLike, unknown][] = []
   const searchDirs = [...new Set([...(paths.projectDir ? [paths.projectDir] : []), base, paths.userDir])]
-  for (const ref of resolved.plugins) {
-    // 用户级配置里的包优先从 ~/.leo 解析
-    const dirs = ref.from.startsWith(paths.userDir) ? [paths.userDir, ...searchDirs.filter((d) => d !== paths.userDir)] : searchDirs
-    userPlugins.push([await importPlugin(ref, dirs), ref.config])
-  }
+  // 用户级配置里的包优先从 ~/.leo 解析
+  const dirsFor = (ref: PluginRef) => (ref.from.startsWith(paths.userDir) ? [paths.userDir, ...searchDirs.filter((d) => d !== paths.userDir)] : searchDirs)
+  const reloader = new PluginHotReloader({
+    loadOptions: opts,
+    paths,
+    logger: opts.logger ?? { debug() {}, info() {}, warn() {}, error() {}, child() { return this } },
+    importPlugin: (ref, version) => importPlugin(ref, dirsFor(ref), version),
+    resolveFile: (ref) => (isAbsolute(ref.spec) ? ref.spec : resolvePluginPackage(ref.spec, dirsFor(ref))),
+    ...(opts.pluginPollMs !== undefined ? { pollMs: opts.pluginPollMs } : {}),
+  })
+  // 先导入（与之前一样，模块错误在启动时就报出来），再在插件槽里按顺序加载
+  const userPluginSlot = definePlugin({
+    name: 'leo:user-plugins',
+    apply: (ctx) => reloader.loadInitial(ctx, resolved.plugins),
+  })
 
   const sessionsDir = config.sessions.persist
     ? config.sessions.dir
@@ -256,7 +279,7 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
     definePlugin({ name: 'leo:paths', apply: (ctx) => void ctx.provide('leoPaths', Object.freeze({ ...paths })) }),
     definePlugin({ name: 'leo:credentials', apply: (ctx) => void ctx.provide('credentials', credentials) }),
     providerKindsPlugin,
-    ...userPlugins,
+    userPluginSlot,
     configured,
     ...(tools.builtin === false
       ? []
@@ -283,6 +306,21 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
     context: config.context,
     plugins,
   })
+  reloader.setLogger(leo.kernel.logger.child({ plugin: 'leo:hot-reload' }))
+  reloader.start(
+    // 热加载：直接挂到根作用域；加载失败时清理掉残留的 failed 运行时，避免影响之后的加载
+    async (p, c) => {
+      const before = new Set(leo.kernel.plugins)
+      try {
+        return await leo.ctx.plugin(p, c)
+      } catch (err) {
+        for (const rt of [...leo.kernel.plugins]) if (!before.has(rt) && rt.state === 'failed') await rt.dispose()
+        throw err
+      }
+    },
+    (event, payload) => leo.ctx.emit(event as never, payload as never),
+    opts.watchPlugins !== false,
+  )
 
   const a = config.agent
   const systemPrompt = [a.systemPrompt ?? DEFAULT_SYSTEM_PROMPT, a.appendSystemPrompt].filter(Boolean).join('\n\n')
@@ -313,6 +351,11 @@ export async function createLeoFromConfig(opts: CreateFromConfigOptions = {}): P
         limits,
       })
     },
-    dispose: () => leo.dispose(),
+    reloadPlugins: () => reloader.reload(),
+    loadedPlugins: () => reloader.loaded(),
+    dispose: async () => {
+      reloader.close()
+      await leo.dispose()
+    },
   }
 }

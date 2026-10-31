@@ -16,7 +16,8 @@ import { textOf } from '../protocol/messages.js'
 import { PROVIDER_PRESETS } from '../providers/catalog.js'
 import type { ApprovalService } from '../tools/types.js'
 import { type CliArgs, HELP, parseArgs } from './args.js'
-import { addPlugin, DEFAULT_PLUGIN_REGISTRY, defaultIo, loadRegistry, removePlugin } from './plugin.js'
+import { addPlugin, DEFAULT_PLUGIN_REGISTRY, defaultIo, initPlugin, loadRegistry, uninstallPlugin } from './plugin.js'
+import { runApiServer } from '../api/server.js'
 import { askSecret, c, makeRl, oneLine, readStdin } from './ui.js'
 
 const out = process.stdout
@@ -56,6 +57,8 @@ async function main(argv: string[]): Promise<number> {
     case 'plugin':
     case 'plugins':
       return cmdPlugin(cwd, args)
+    case 'api':
+      return cmdApi(cwd, args)
     default:
       return cmdRun(cwd, args)
   }
@@ -139,30 +142,64 @@ async function cmdPlugin(cwd: string, args: CliArgs): Promise<number> {
   const registry = args.registry ?? process.env.LEO_PLUGIN_REGISTRY ?? DEFAULT_PLUGIN_REGISTRY
   const io = defaultIo(log)
   const { paths } = resolved
-  const projectRoot = args.global ? undefined : (paths.projectRoot ?? cwd)
-  const scopeDir = args.global ? paths.userDir : (paths.projectDir ?? join(cwd, '.leo'))
+  if (args.global && args.project) return void log(c.red('-g 与 --project 不能同时使用')), 2
+  // 默认全局（~/.leo）；--project 才装到当前项目。-g 仍可写，等同默认
+  const project = args.project
+  const projectRoot = project ? (paths.projectRoot ?? cwd) : undefined
+  const scopeDir = project ? (paths.projectDir ?? join(cwd, '.leo')) : paths.userDir
+  // 插件声明了配置文件模板时自动初始化（已存在的文件保留）；--no-init 跳过，--init-from 用自己的模板
+  const init: boolean | string = args.initFrom ?? !args.noInit
   try {
     if (sub === 'add' || sub === 'install' || sub === 'i') {
-      if (!name) return void log(c.red('用法：leo plugin add <id> [-g] [--npm]')), 2
-      await addPlugin({ name, scopeDir, ...(projectRoot ? { projectRoot } : {}), npm: args.npm, registry, leoVersion: version() }, io)
+      if (!name) return void log(c.red('用法：leo plugin add <id> [--project] [--no-init | --init-from <path>] [--npm]')), 2
+      await addPlugin(
+        { name, scopeDir, ...(projectRoot ? { projectRoot } : {}), npm: args.npm, registry, leoVersion: version(), init, force: args.force },
+        io,
+      )
+      return 0
+    }
+    if (sub === 'init') {
+      if (!name) return void log(c.red('用法：leo plugin init <id> [--project] [--init-from <path>] [--force]')), 2
+      log(`初始化 ${name} 的配置文件 → ${scopeDir}`)
+      const written = await initPlugin({ name, scopeDir, registry, from: args.initFrom ?? true, force: args.force }, io)
+      if (!written.length) log(c.gray('没有写入新文件'))
       return 0
     }
     if (sub === 'remove' || sub === 'rm' || sub === 'uninstall') {
-      if (!name) return void log(c.red('用法：leo plugin remove <id> [-g]')), 2
-      return (await removePlugin({ name, scopeDir, registry }, io)) ? 0 : 1
+      if (!name) return void log(c.red('用法：leo plugin remove <id> [--project | --all] [--purge]')), 2
+      if (args.all && (args.project || args.global)) return void log(c.red('--all 不能与 -g / --project 同时使用')), 2
+      const ok = await uninstallPlugin(
+        {
+          name,
+          registry,
+          userDir: paths.userDir,
+          ...(paths.projectDir ? { projectDir: paths.projectDir } : {}),
+          scope: args.all ? 'all' : project ? 'project' : 'global',
+          purge: args.purge,
+        },
+        io,
+      )
+      return ok ? 0 : 1
     }
     if (sub === 'list' || sub === 'ls') {
+      const scopeOf = (p: { spec: string; from: string }) =>
+        paths.projectDir && (p.from.startsWith(paths.projectDir) || p.spec.startsWith(paths.projectDir) || (paths.projectConfig && p.from === paths.projectConfig))
+          ? '项目'
+          : p.from === 'overrides'
+            ? '参数'
+            : '全局'
       log(c.bold('已安装'))
       if (!resolved.plugins.length) log(c.gray('  （无）'))
-      for (const p of resolved.plugins) log(`  ${p.spec} ${c.gray(`(${p.from})`)}`)
+      for (const p of resolved.plugins) log(`  ${c.cyan(`[${scopeOf(p)}]`)} ${p.spec} ${c.gray(`(${p.from})`)}`)
       try {
         const reg = await loadRegistry(registry, io)
         log(`\n${c.bold('插件仓库')} ${c.gray(registry)}`)
-        const installed = resolved.plugins.map((p) => p.spec)
         for (const e of reg.plugins) {
-          const mark = installed.some((s) => s === e.package || s.endsWith(`/${e.id}.bundle.js`)) ? c.green(' 已安装') : ''
+          const hit = resolved.plugins.find((p) => p.spec === e.package || p.spec.endsWith(`/${e.id}.bundle.js`) || p.spec.endsWith(`\\${e.id}.bundle.js`))
+          const mark = hit ? c.green(` 已安装（${scopeOf(hit)}）`) : ''
           const status = e.status === 'stable' ? '' : c.yellow(` [${e.status}]`)
-          log(`  ${c.bold(e.id)} ${e.version}${status}${mark}  ${c.gray(e.description)}`)
+          const initMark = e.init?.files?.length ? c.gray(` [配置: ${e.init.files.map((f) => f.path).join(', ')}]`) : ''
+          log(`  ${c.bold(e.id)} ${e.version}${status}${initMark}${mark}  ${c.gray(e.description)}`)
         }
       } catch (e) {
         log(c.yellow(`\n${(e as Error).message}`))
@@ -170,7 +207,7 @@ async function cmdPlugin(cwd: string, args: CliArgs): Promise<number> {
       return 0
     }
     log(c.red(`未知子命令：${sub}`))
-    log('用法：leo plugin list | add <id> | remove <id>')
+    log('用法：leo plugin list | add <id> [--project] | init <id> | remove <id> [--project | --all] [--purge]')
     return 2
   } catch (e) {
     log(c.red(`✗ ${(e as Error).message}`))
@@ -277,6 +314,55 @@ async function cmdDoctor(cwd: string, args: CliArgs): Promise<number> {
   log(`  ${config.sessions.persist ? (config.sessions.dir ?? join(paths.projectDir ?? paths.userDir, 'sessions')) : '(内存，不持久化)'}`)
   await app.dispose()
   return app.model ? 0 : 1
+}
+
+// —— leo api ——————————————————————————————————————————————————————————————
+async function cmdApi(cwd: string, args: CliArgs): Promise<number> {
+  const host = args.host ?? process.env.LEO_API_HOST ?? '127.0.0.1'
+  const port = args.port ?? (process.env.LEO_API_PORT ? Number(process.env.LEO_API_PORT) : 8765)
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    log(c.red(`✗ 无效端口：${port}`))
+    return 2
+  }
+  const token = args.token ?? process.env.LEO_API_TOKEN
+  let app: LeoApp
+  try {
+    app = await createLeoFromConfig({
+      cwd,
+      overrides: {
+        ...(args.model ? { model: args.model } : {}),
+        ...(args.yes || args.noTools ? { tools: { ...(args.yes ? { approval: 'auto' } : {}), ...(args.noTools ? { builtin: false } : {}) } } : {}),
+      },
+    })
+  } catch (e) {
+    log(c.red(`✗ ${(e as Error).message}`))
+    return 1
+  }
+  const { config, paths } = app.resolved
+  const sessionsDir = config.sessions.persist
+    ? config.sessions.dir
+      ? resolve(paths.projectRoot ?? cwd, config.sessions.dir)
+      : join(paths.projectDir ?? paths.userDir, 'sessions')
+    : undefined
+  const approval = args.yes ? 'auto' : config.tools.approval
+  log(c.gray(`leo ${version()} · api · ${app.model ?? '(无默认模型)'} · 审批 ${approval}${approval === 'ask' ? '（API 模式无人审批，写文件/执行命令会被拒绝，可加 -y）' : ''}`))
+  if (!app.model) log(c.yellow('还没有可用的模型：聊天接口会返回错误，插件与工具接口仍可使用。运行 leo auth set <provider> 配置密钥'))
+  if (!token && host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') log(c.yellow(`⚠ 监听 ${host} 且未设置 --token，任何能访问该地址的人都能调用 leo`))
+  try {
+    return await runApiServer(
+      {
+        leo: app.leo,
+        ...(app.model ? { model: app.model } : {}),
+        createAgent: (o) => app.createAgent(o),
+        ...(sessionsDir ? { sessionsDir } : {}),
+        providers: app.providers.map((p) => ({ id: p.id, name: p.name, loaded: p.loaded, defaultModel: p.defaultModel ?? null, reason: p.reason ?? null })),
+        info: { version: version(), cwd, projectRoot: paths.projectRoot ?? null, approval },
+      },
+      { host, port, ...(token ? { token } : {}), ...(args.python ? { python: args.python } : {}), venvDir: join(paths.userDir, 'api', '.venv'), log },
+    )
+  } finally {
+    await app.dispose()
+  }
 }
 
 // —— leo / leo run ——————————————————————————————————————————————————————
@@ -431,6 +517,12 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
   }
 
   ready = app
+  // 插件热加载：运行中安装、移除、更新插件时提示一行
+  if (interactive) {
+    app.leo.ctx.on('plugin/loaded', ({ name, reason }) => log(c.gray(`\n[插件] ${reason === 'added' ? '已加载' : '已重新加载'} ${name}`)))
+    app.leo.ctx.on('plugin/unloaded', ({ name, reason }) => void (reason === 'removed' && log(c.gray(`\n[插件] 已卸载 ${name}`))))
+    app.leo.ctx.on('plugin/failed', ({ spec, error }) => log(c.yellow(`\n[插件] 加载失败 ${spec}：${error}`)))
+  }
   if (!app.model) {
     log(c.yellow('还没有可用的模型。三选一：'))
     log(`  1) ${c.bold('leo auth set deepseek')}            保存密钥（其他：openai / qwen / moonshot / zhipu / siliconflow / openrouter）`)
@@ -505,6 +597,14 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
           }
         } else if (cmd === 'models') {
           for (const p of app.providers.filter((x) => x.loaded)) log(`  ${p.id}/${p.defaultModel ?? '<model>'}`)
+        } else if (cmd === 'plugins') {
+          if (rest[0] === 'reload') {
+            const r = await app.reloadPlugins()
+            log(c.gray(`新增 ${r.added.length} · 更新 ${r.changed.length} · 移除 ${r.removed.length}${r.failed.length ? ` · 失败 ${r.failed.length}` : ''}`))
+          }
+          const list = app.loadedPlugins()
+          if (!list.length) log(c.gray('  （没有加载第三方插件）'))
+          for (const p of list) log(`  ${p.name} ${c.gray(p.spec)}`)
         } else if (cmd === 'session') log(`会话 ${agent.sessionId}（leo -s ${agent.sessionId} 可恢复）`)
         else log(c.yellow(`未知命令 /${cmd}，输入 /help`))
         continue

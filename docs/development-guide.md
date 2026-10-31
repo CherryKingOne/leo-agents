@@ -281,6 +281,7 @@ myExtension.inject = ['tools']          // 可选
 | `name` | 是 | 插件名。建议 `scope/name` 或 `leo-plugin-xxx` |
 | `inject` | 否 | 依赖的服务键数组。缺任何一个，插件处于 `pending`；服务被替换时插件会**自动撤销并重新 apply** |
 | `config` | 否 | zod schema。加载时 `safeParse`，失败抛 `plugin_config_invalid` |
+| `watch` | 否 | 热加载时要关注的数据文件，相对 `.leo/` 的路径，`/` 结尾表示目录，如 `['mcp-servers.json']`、`['agents/']`。宿主同时监听 `~/.leo/` 和项目 `.leo/` 下的这些路径，变化时重新加载本插件（见 4.9） |
 | `apply(ctx, config)` | 是 | 入口。可以是 async。抛异常时插件进入 `failed`，已做的注册会被撤销 |
 
 ### 4.3 生命周期
@@ -370,17 +371,35 @@ console.log(leo.describe())
 ### 4.7 用 `leo plugin` 安装插件
 
 ```bash
-leo plugin list                     # 已安装的插件 + 官方插件仓库
-leo plugin add sub-agents           # 下载单文件到 .leo/plugins/sub-agents.bundle.js（校验 sha256），自动加载
-leo plugin add sub-agents -g        # 装到 ~/.leo/plugins/，所有项目可用
-leo plugin add sub-agents --npm     # npm install --prefix .leo，并把包名写进 .leo/config.json 的 plugins
-leo plugin add @acme/x --npm        # 仓库外的任意 npm 包
-leo plugin remove sub-agents [-g]   # 删除单文件 / 从配置移除并 npm uninstall
+leo plugin list                            # 已安装的插件（标注 全局 / 项目）+ 官方插件仓库
+leo plugin add mcp                         # 默认全局：~/.leo/plugins/mcp.bundle.js（校验 sha256），并自动生成 ~/.leo/mcp-servers.json
+leo plugin add mcp --project               # 只装到当前项目：.leo/plugins/ 与 .leo/mcp-servers.json（--local / -l 同义）
+leo plugin add mcp --no-init               # 只装插件，不生成配置文件
+leo plugin add mcp --init-from ./tpl       # 用你自己的模板目录（按相对路径复制进 .leo/）或单个文件
+leo plugin init mcp [--project] [--force]  # 重新生成配置文件；已存在的文件默认保留，--force 覆盖
+leo plugin add sub-agents --npm            # npm install --prefix ~/.leo，并把包名写进 ~/.leo/config.json 的 plugins
+leo plugin add @acme/x --npm --project     # 仓库外的任意 npm 包，装到项目
+leo plugin remove mcp                      # 卸载全局安装（默认）；别名 rm / uninstall
+leo plugin remove mcp --project            # 只卸载当前项目里的（--local / -l 同义）
+leo plugin remove mcp --all                # 全局和项目都卸载
+leo plugin remove mcp --purge              # 连同安装时生成的配置文件一起删除（默认保留）
 ```
 
+- **默认全局安装**到 `~/.leo/`（`LEO_HOME` 可改位置），在任何项目里运行 `leo` 都会加载；`--project` 才装进当前项目的 `.leo/`
+  （当前目录及上级都没有 `.leo/` 时会在当前目录创建）。`-g` 仍可写，等同默认。
+- **加载规则**：全局 `~/.leo/plugins/`、`~/.leo/config.json` 与项目 `.leo/plugins/`、`.leo/config.json` 里的插件都会加载。
+  同一插件两处都装（`plugins/` 里同名文件，或 config 里同一包名）时只加载一次，**项目的那份生效**；
+  项目没写插件选项时沿用全局 config 里写的。
+- **自动初始化配置文件**：插件在清单 `leo-plugin.json` 的 `init.files` 里声明配置文件模板（目标路径相对 `.leo/`），
+  发布时模板随 bundle 一起上传，registry 条目带上 `init.files[].url` 与 `sha256`。`leo plugin add` 安装后自动把模板写进
+  `~/.leo/` 或项目 `.leo/`（校验 sha256，路径不能越出 `.leo/`，已存在的文件不覆盖）；插件没有模板就跳过。
+  npm 安装的包读取包内 `leo-plugin.json` 的 `init.files[].template`。`--init` 仍可写，等同默认。
+- **卸载**：默认卸载全局，`--project` 卸载项目，`--all` 两处都卸。只卸一处时，如果另一处还装着会提示：卸掉全局后项目里的那份仍在该项目生效；卸掉项目那份后该项目改用全局的。
+  会删除 `plugins/` 里的单文件、`config.json` 里的包名，并 `npm uninstall` 包。配置文件默认保留，`--purge` 才删除插件声明的 `init.files`。
+- **不用重启**：正在运行的 `leo`（对话、`leo api`）会自动感知安装、移除和更新并热加载（通常不到一秒，最多约 3 秒），见 4.9。
 - 插件仓库默认是官方仓库 `https://raw.githubusercontent.com/CherryKingOne/leo-plugin/main/registry.json`，
   可用 `--registry <url|路径>` 或环境变量 `LEO_PLUGIN_REGISTRY` 指向镜像或私有仓库。
-- 仓库条目格式见 leo-plugin 仓库的 `schemas/registry.schema.json`；`bundle.url` 可写相对地址（相对仓库文件）。
+- 仓库条目格式见 leo-plugin 仓库的 `schemas/registry.schema.json`；`bundle.url`、`init.files[].url` 可写相对地址（相对仓库文件）。
 - npm 包按顺序在 **项目 `.leo/` → 项目根 → `~/.leo/`** 的 `node_modules` 中解析（用户级配置里的包先查 `~/.leo/`），
   支持只有 `import` 条件的纯 ESM 包。
 - 写配置时只改 `plugins` 数组，保留文件里的注释与格式。
@@ -391,6 +410,40 @@ leo plugin remove sub-agents [-g]   # 删除单文件 / 从配置移除并 npm u
 插件用 `ctx.maybe('leoPaths')` 读取（用 `createLeo` 手动组装时没有这个服务，插件应能在缺失时正常工作）。
 
 ---
+
+### 4.9 插件热加载
+
+通过 `createLeoFromConfig` 启动（含 `leo` 对话和 `leo api`）时，插件是**热加载**的：运行中安装、移除、更新插件，或修改插件的数据文件，不需要重启。
+
+**监听什么**（`fs.watch` + 每 3 秒一次轮询兜底，都不会让进程常驻）：
+
+- `~/.leo/config.json`、`~/.leo/plugins/`、项目 `.leo/config.json`、项目 `.leo/plugins/`（当前目录后来才创建 `.leo/` 也能感知）
+- 已加载插件在定义里声明的 `watch` 路径，全局和项目各一份
+
+**怎么应用**（变化后合并约 300ms 再处理，串行执行）：
+
+| 变化 | 处理 | 事件 |
+|---|---|---|
+| 新出现的插件 | 加载 | `plugin/loaded`（reason: `added`） |
+| 插件被删除或从配置移除 | 卸载：撤销它通过 `ctx` 做的全部注册（服务、工具、监听器、effect） | `plugin/unloaded`（reason: `removed`） |
+| 模块文件、插件选项或 `watch` 文件变化 | 先卸载旧实例，再加载新实例 | `plugin/unloaded` + `plugin/loaded`（reason: `changed`） |
+| 新实例加载失败 | 恢复旧实例；同一个坏版本不会反复重试 | `plugin/failed` |
+| 项目里装了同一插件 | 卸载全局那份，加载项目那份 | removed + added |
+
+- 先卸载、再加载，所以新旧两份不会同时注册同名工具。Agent **每一步**都重新读取工具列表，热加载的工具从下一步起可用，卸载的工具从下一步起不再暴露。
+- 依赖热加载插件服务的其他插件，会因为服务出现、替换或消失而自动重新 apply 或进入 pending（4.3 的依赖机制）。
+- 模块用带版本号的 URL 重新 `import`，绕过 ESM 缓存；npm 包只会重新加载入口文件。
+- **不热更新**：模型、提供方、内置工具、审批模式等宿主配置，改了仍需重启。
+- 代码中：`app.reloadPlugins()` 立即扫描并返回 `{ added, removed, changed, failed }`；`app.loadedPlugins()` 列出当前插件；
+  `createLeoFromConfig({ watchPlugins: false })` 关闭自动监听，`pluginPollMs` 调整轮询间隔（0 关闭）。
+- 交互模式：`/plugins` 查看已加载的插件，`/plugins reload` 立即重新扫描；加载、卸载时会提示一行。
+
+**插件要满足的条件**（否则热加载会留下残余）：
+
+1. 所有注册都通过 `ctx` 完成：`ctx.provide`、`ctx.on`、`await ctx.effect(() => tools.register(def))`。直接调用 `tools.register` 不放进 `ctx.effect` 的，卸载时撤不掉，重新加载会报“工具已注册”。
+2. 自己开的资源（子进程、连接、定时器、文件监听）用 `ctx.effect(() => () => close())` 交给宿主关闭，或监听 `ctx.signal` 的 abort。
+3. 不在模块顶层做有副作用的事（启动进程、写全局变量）：热加载会重新执行模块，顶层代码每次都会再跑一遍。
+4. 运行时读取的数据文件写进 `watch`，用户改完文件就会生效；不需要自己写文件监听。
 
 ## 5. 服务：注册、获取、替换
 
@@ -1048,5 +1101,8 @@ expect(mock.requests[1].messages.at(-1).role).toBe('tool')  // 断言模型收�
 | `agent/event` | emit | `{ agent, event }` | AgentEvent 旁路广播 |
 | `usage/recorded` | emit | `{ agentId, sessionId, turnId, stepId, model, usage, tenant }` | 计量 |
 | `session/appended` | emit | `SessionEvent` | 会话事件写入后 |
+| `plugin/loaded` | emit | `{ spec, name, reason: 'added' \| 'changed' }` | 热加载了插件（启动时的加载不发） |
+| `plugin/unloaded` | emit | `{ spec, name, reason: 'removed' \| 'changed' }` | 热卸载了插件 |
+| `plugin/failed` | emit | `{ spec, error }` | 热加载失败（changed 时已恢复旧版本） |
 
 可选服务（由 `createLeoFromConfig` / CLI 提供）：`credentials`（密钥查找）、`providerKinds`（提供方类型注册表）、`approval`（人工审批）。
