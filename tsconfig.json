@@ -15,7 +15,9 @@
     "rootDir": ".",
     "skipLibCheck": true,
     "allowImportingTsExtensions": false,
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    // examples/ 按用户的写法 import 'leo-agents'；类型检查时指向源码，不依赖先构建出 dist（CI 先 typecheck 后 build）
+    "paths": { "leo-agents": ["./src/index.ts"] }
   },
   "include": ["src", "test", "examples"]
 }
