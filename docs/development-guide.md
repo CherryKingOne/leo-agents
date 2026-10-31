@@ -688,9 +688,9 @@ Agent ⇄ llm 服务（底座）
 - `ctx.maybe('credentials')`：统一取密钥（`--api-key`、`credentials.json`、`$ENV`、`!command`）
 - `ctx.maybe('leoConfig')`：合并后的 `.leo/config.json`（只读），读默认模型 `model` 与 0.1.x 的 `providers`
 - `LlmProvider` 的可选字段 `name`、`defaultModel`、`listModels()`、`status()`：`leo models` / `leo doctor` 据此显示；`status().ready === false`（如缺密钥）的 provider 不会被选为默认模型
-- `LlmProvider.refreshModels()`（可选，0.3.0）：向厂商接口实时获取模型列表（如 `GET /models`），`llm.models({ refresh: true })` 与 `leo models` 调用它，失败时退回 `listModels()`
-- `ModelInfo`（0.3.0 起）除 `id` / `contextWindow` / `maxOutputTokens` / `pricing` 外还有：`name`（展示名）、`inputModalities` / `outputModalities`、`reasoning: { supported, canDisable, defaultEnabled, efforts, defaultEffort }`、`ownedBy`、`alias`（旧名字，可用但不展示）、`source`（`remote` / `builtin`）
-- `LlmRequest.reasoning`（0.3.0）：统一的思考控制 `{ enabled?: boolean, effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }`，来自 `AgentOptions.reasoning` 或配置 `agent.reasoning`。各厂商插件翻译成自己的参数（DeepSeek：`thinking` / `reasoning_effort`），把模型不支持的档位映射到最接近的一档；不写由模型决定
+- `LlmProvider.refreshModels()`（可选，0.2.0）：向厂商接口实时获取模型列表（如 `GET /models`），`llm.models({ refresh: true })` 与 `leo models` 调用它，失败时退回 `listModels()`
+- `ModelInfo`（0.2.0 起）除 `id` / `contextWindow` / `maxOutputTokens` / `pricing` 外还有：`name`（展示名）、`inputModalities` / `outputModalities`、`reasoning: { supported, canDisable, defaultEnabled, efforts, defaultEffort }`、`ownedBy`、`alias`（旧名字，可用但不展示）、`source`（`remote` / `builtin`）
+- `LlmRequest.reasoning`（0.2.0）：统一的思考控制 `{ enabled?: boolean, effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' }`，来自 `AgentOptions.reasoning` 或配置 `agent.reasoning`。各厂商插件翻译成自己的参数（DeepSeek：`thinking` / `reasoning_effort`），把模型不支持的档位映射到最接近的一档；不写由模型决定
 - 插件不能运行时 import leo-agents，抛不出 `LeoError` 实例：抛带 `Symbol.for('leo.error')` 标记和 `code` 的普通 Error，宿主按 code 处理（`LEO_ERROR_MARK`）
 
 ```ts
