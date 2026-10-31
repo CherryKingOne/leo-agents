@@ -1,6 +1,10 @@
 # 更新日志
 
-## 未发布
+## 0.1.2 — 2026-10-31
+
+0.1.2 让 leo 能**常驻运行插件**：`leo serve` 后台在线、插件可按宿主配置创建 Agent、插件能给用户发提示，卸载时可清理插件写入的凭据。消息网关（gateway 0.2.x）及其 QQ / 飞书子插件依赖这些能力。
+
+### 新增
 
 - `leo plugin remove <id> --purge` 同时清理插件写进 `credentials.json` 的凭据：按插件清单 / registry 里的 `purge.credentials` 删除（`/` 结尾按前缀匹配），其他凭据保留。例如 gateway-qq 卸载后再装会重新扫码。
 - 新增 `agentFactory` 服务：插件按宿主配置（默认模型、系统提示词、步数 / 预算 / 超时）创建 Agent。
