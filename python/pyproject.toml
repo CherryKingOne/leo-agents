@@ -1,6 +1,6 @@
 [project]
 name = "leo-api"
-version = "0.1.0"
+version = "0.1.1"
 description = "leo api：leo-agents 的 HTTP API 服务（由 leo api 启动）"
 requires-python = ">=3.12,<3.13"
 dependencies = [

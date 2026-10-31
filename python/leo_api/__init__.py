@@ -4,4 +4,4 @@
 本包作为子进程，通过 stdin/stdout 的 JSON Lines 与它通信，并对外提供 HTTP 接口。
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
