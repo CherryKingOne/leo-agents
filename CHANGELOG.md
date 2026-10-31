@@ -3,7 +3,7 @@
 ## 0.1.1 — 2026-10-31
 
 0.1.0 是“能跑起来的底座”：插件内核、通用 Agent Loop、OpenAI 兼容 Provider、`.leo` 配置和 `leo` 命令行。
-0.1.1 在此基础上补齐**插件生态的最后一公里**：插件能一条命令装好、装好就有配置文件、装卸改都不用重启；同时引入以 HTTP 服务方式运行 leo 的 `leo api`。
+0.1.1 在此基础上补齐**插件生态的最后一公里**：插件能一条命令装好、装好就有配置文件、装卸改都不用重启。
 
 ### 新增
 
@@ -24,12 +24,6 @@
 - 交互模式新增 `/plugins`、`/plugins reload`。
 - 注：模型 / Provider 等宿主配置变更仍需重启。
 
-**`leo api`：以 HTTP 服务运行**
-
-- `leo api [--host] [--port] [--token] [-y]`：Node 侧持有常驻 leo 实例（配置、密钥、插件与 `leo` 一致，插件持续在线），HTTP 层为 Python 3.12 + FastAPI/uvicorn，二者通过 stdin/stdout JSON Lines 通信。
-- 接口：`/v1/chat`（支持 SSE 流式）、`/v1/chat/completions`（OpenAI 兼容）、`/v1/tools/{name}`（直接调用工具）、会话管理、模型 / 工具 / 插件信息；`/docs` 为交互式接口文档。
-- Python 环境由 uv 管理（依赖由 `uv.lock` 锁定，venv 位于 `~/.leo/api/.venv`），无 uv 时回退到本机 Python 3.12。详见 `docs/api.md`。
-
 **工具与 Agent**
 
 - `Permission.sideEffect`：插件声明的新副作用类型（如 `mcp.call`）同样遵循 ask / auto / deny / `-y` 审批策略。
@@ -41,7 +35,7 @@
 ### 文档
 
 - `docs/development-guide.md` 补充插件安装、配置模板、热加载与 `watch` 约定。
-- 新增 `docs/api.md`；安装指南补充 `chmod +x` 步骤。
+- 安装指南补充 `chmod +x` 步骤。
 
 ### 配套
 
@@ -49,5 +43,5 @@
 
 ### 兼容性
 
-- 相对 0.1.0 无破坏性变更，只新增能力；`leo api` 需要本机安装 uv（或 Python 3.12）。
-- 测试 78 项通过，typecheck 与 build 通过。
+- 相对 0.1.0 无破坏性变更，只新增能力。
+- 测试 75 项通过，typecheck 与 build 通过。
