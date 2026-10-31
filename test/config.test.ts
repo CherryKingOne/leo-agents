@@ -1,42 +1,38 @@
-import { createServer, type Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { createBuiltinTools, createLeoFromConfig, DefaultCredentialService, loadConfig, resolveSecret, textOf } from '../src/index.js'
 
-// —— 一个最小的 OpenAI 兼容假服务：第一步要求 write_file，第二步返回文本 ——
-let server: Server
-let baseURL = ''
+// —— 测试用模型供应商插件：第一步要求 write_file，第二步返回文本；记录取到的密钥 ——
 const seenAuth: (string | undefined)[] = []
-beforeAll(async () => {
-  server = createServer((req, res) => {
-    let body = ''
-    req.on('data', (d) => (body += d))
-    req.on('end', () => {
-      seenAuth.push(req.headers.authorization)
-      const j = JSON.parse(body) as { messages: { role: string; content: unknown }[] }
-      const last = j.messages.at(-1)!
-      res.writeHead(200, { 'content-type': 'text/event-stream' })
-      const send = (o: unknown) => res.write(`data: ${JSON.stringify(o)}\n\n`)
+;(globalThis as { __leoSeenAuth?: unknown }).__leoSeenAuth = seenAuth
+const SCRIPTED_PROVIDER = `export default { name: 'scripted-provider', inject: ['llm', 'credentials'], apply(ctx, cfg = {}) {
+  const id = cfg.id ?? 'local'
+  const provider = {
+    id, name: 'Scripted', defaultModel: cfg.defaultModel ?? 'm',
+    status: () => ({ ready: cfg.ready ?? true, ...(cfg.ready === false ? { reason: 'no API key' } : {}), via: 'scripted' }),
+    async *stream(req) {
+      globalThis.__leoSeenAuth?.push(ctx.get('credentials').get({ id }))
+      const last = req.messages.at(-1)
       if (last.role === 'user') {
-        send({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'write_file', arguments: '{"path":"out.txt","content":"ok"}' } }] }, finish_reason: 'tool_calls' }] })
+        yield { type: 'tool_call_delta', index: 0, id: 'c1', name: 'write_file', argumentsDelta: '{"path":"out.txt","content":"ok"}' }
+        yield { type: 'done', finishReason: 'tool_calls' }
       } else {
-        send({ choices: [{ delta: { content: `tool said: ${String(last.content)}` }, finish_reason: 'stop' }] })
+        const text = Array.isArray(last.content) ? last.content.map((b) => b.text ?? '').join('') : String(last.content)
+        yield { type: 'text_delta', text: 'tool said: ' + text }
+        yield { type: 'done', finishReason: 'stop' }
       }
-      res.end('data: [DONE]\n\n')
-    })
-  })
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
-  baseURL = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`
-})
-afterAll(() => new Promise<void>((r) => server.close(() => r())))
+    },
+  }
+  ctx.effect(() => ctx.get('llm').registerProvider(provider, cfg.default ? { default: true } : {}))
+} }`
 
 async function project(config: unknown, creds?: Record<string, string>) {
   const root = await mkdtemp(join(tmpdir(), 'leo-proj-'))
   const home = await mkdtemp(join(tmpdir(), 'leo-home-'))
-  await mkdir(join(root, '.leo'), { recursive: true })
+  await mkdir(join(root, '.leo', 'plugins'), { recursive: true })
+  await writeFile(join(root, 'scripted.mjs'), SCRIPTED_PROVIDER)
   await writeFile(join(root, '.leo', 'config.json'), `// comment\n${JSON.stringify(config)}`)
   if (creds) await writeFile(join(root, '.leo', 'credentials.json'), JSON.stringify(creds))
   return { root, home }
@@ -83,7 +79,7 @@ describe('loadConfig', () => {
 describe('createLeoFromConfig', () => {
   it('runs a real agent loop against a configured endpoint with builtin tools', async () => {
     const { root, home } = await project(
-      { model: 'local/m', providers: { local: { baseURL, models: ['m'] } }, tools: { approval: 'auto' } },
+      { model: 'local/m', plugins: ['./scripted.mjs'], tools: { approval: 'auto' } },
       { local: 'sk-proj' },
     )
     const app = await createLeoFromConfig({ cwd: root, userDir: home, env: {} })
@@ -92,13 +88,13 @@ describe('createLeoFromConfig', () => {
     expect(r.reason).toBe('completed')
     expect(await readFile(join(root, 'out.txt'), 'utf8')).toBe('ok')
     expect(r.text).toContain('Wrote 2 bytes')
-    expect(seenAuth.at(-1)).toBe('Bearer sk-proj')
+    expect(seenAuth.at(-1)).toBe('sk-proj')
     expect((await stat(join(root, '.leo', 'sessions'))).isDirectory()).toBe(true)
     await app.dispose()
   })
 
   it('denies side-effect tools when approval=ask and nobody can approve', async () => {
-    const { root, home } = await project({ model: 'local/m', providers: { local: { baseURL, models: ['m'] } } })
+    const { root, home } = await project({ model: 'local/m', plugins: ['./scripted.mjs'] })
     const app = await createLeoFromConfig({ cwd: root, userDir: home, env: {} })
     const r = await app.createAgent().run('write it')
     const tool = r.messages.find((m) => m.role === 'tool')!
@@ -133,29 +129,52 @@ describe('createLeoFromConfig', () => {
     await leo.dispose()
   })
 
-  it('auto-detects built-in providers from env and reports missing keys', async () => {
+  it('has no built-in vendors: without a provider plugin there is no model', async () => {
     const root = await mkdtemp(join(tmpdir(), 'leo-empty-'))
     const home = await mkdtemp(join(tmpdir(), 'leo-home-'))
-    const none = await createLeoFromConfig({ cwd: root, userDir: home, env: {} })
+    const none = await createLeoFromConfig({ cwd: root, userDir: home, env: { DEEPSEEK_API_KEY: 'sk-env' } })
     expect(none.model).toBeUndefined()
-    expect(() => none.createAgent()).toThrow(/leo auth set/)
+    expect(none.providers).toEqual([])
+    expect(() => none.createAgent()).toThrow(/leo plugin add provider/)
     await none.dispose()
-    const app = await createLeoFromConfig({ cwd: root, userDir: home, env: { DEEPSEEK_API_KEY: 'sk-env' } })
-    expect(app.model).toBe('deepseek/deepseek-chat')
-    expect(app.providers.find((p) => p.id === 'deepseek')?.credential.source).toBe('env')
+  })
+
+  it('takes the default model from provider plugins, skipping providers that report not ready', async () => {
+    const { root, home } = await project({
+      plugins: [
+        ['./scripted.mjs', { id: 'nokey', defaultModel: 'a', ready: false, default: true }],
+        ['./scripted2.mjs', { id: 'ok', defaultModel: 'b' }],
+      ],
+    })
+    await writeFile(join(root, 'scripted2.mjs'), SCRIPTED_PROVIDER.replace("'scripted-provider'", "'scripted-provider-2'"))
+    const app = await createLeoFromConfig({ cwd: root, userDir: home, env: {} })
+    expect(app.model).toBe('ok/b')
+    expect(app.providers.map((p) => [p.id, p.loaded, p.reason, p.default, p.via])).toEqual([
+      ['nokey', false, 'no API key', true, 'scripted'],
+      ['ok', true, undefined, false, 'scripted'],
+    ])
     await app.dispose()
   })
 
-  it('loads third-party plugins that register new provider kinds', async () => {
-    const { root, home } = await project({ model: 'e/x', providers: { e: { type: 'echo' } }, plugins: [['./.leo/plugins/echo.mjs', { prefix: '>' }]] })
-    await mkdir(join(root, '.leo', 'plugins'), { recursive: true })
+  it('exposes the merged config (including 0.1.x providers) to provider plugins via leoConfig', async () => {
+    const { root, home } = await project({ model: 'x/y', providers: { deepseek: { baseURL: 'https://example.invalid/v1', models: ['m'] } } })
+    const app = await createLeoFromConfig({ cwd: root, userDir: home, env: {} })
+    const cfg = app.leo.ctx.get('leoConfig')
+    expect(cfg.model).toBe('x/y')
+    expect(cfg.providers.deepseek).toEqual({ baseURL: 'https://example.invalid/v1', models: ['m'] })
+    expect(app.model).toBe('x/y') // 显式配置的 model 原样使用
+    await app.dispose()
+  })
+
+  it('loads third-party plugins that register providers into llm', async () => {
+    const { root, home } = await project({ model: 'e/x', plugins: [['./.leo/plugins/echo.mjs', { prefix: '>' }]] })
     await writeFile(
       join(root, '.leo', 'plugins', 'echo.mjs'),
-      `export default { name: 'echo', inject: ['providerKinds'], async apply(ctx, cfg) {
-        await ctx.effect(() => ctx.get('providerKinds').register('echo', ({ id }) => ({ id, async *stream(req) {
+      `export default { name: 'echo', inject: ['llm'], async apply(ctx, cfg) {
+        await ctx.effect(() => ctx.get('llm').registerProvider({ id: 'e', async *stream(req) {
           yield { type: 'text_delta', text: cfg.prefix + req.messages.at(-1).content[0].text }
           yield { type: 'done', finishReason: 'stop' }
-        } })))
+        } }))
       } }`,
     )
     const app = await createLeoFromConfig({ cwd: root, userDir: home, env: {} })
@@ -165,15 +184,14 @@ describe('createLeoFromConfig', () => {
   })
 
   it('provides agentFactory so plugins create agents with the host defaults', async () => {
-    const { root, home } = await project({ model: 'e/x', providers: { e: { type: 'echo' } }, agent: { systemPrompt: 'HOST PROMPT', maxSteps: 7 }, plugins: ['./.leo/plugins/bot.mjs'] })
-    await mkdir(join(root, '.leo', 'plugins'), { recursive: true })
+    const { root, home } = await project({ agent: { systemPrompt: 'HOST PROMPT', maxSteps: 7 }, plugins: ['./.leo/plugins/bot.mjs'] })
     await writeFile(
       join(root, '.leo', 'plugins', 'bot.mjs'),
-      `export default { name: 'bot', inject: ['providerKinds'], async apply(ctx) {
-        await ctx.effect(() => ctx.get('providerKinds').register('echo', ({ id }) => ({ id, async *stream(req) {
+      `export default { name: 'bot', inject: ['llm'], async apply(ctx) {
+        await ctx.effect(() => ctx.get('llm').registerProvider({ id: 'e', defaultModel: 'x', async *stream(req) {
           yield { type: 'text_delta', text: 'echo:' + req.messages.at(-1).content[0].text }
           yield { type: 'done', finishReason: 'stop' }
-        } })))
+        } }))
         ctx.provide('botProbe', { run: (text) => ctx.get('agentFactory').create({ tools: false, label: 'bot' }).run(text), factory: () => ctx.get('agentFactory') })
       } }`,
     )
@@ -192,7 +210,6 @@ describe('createLeoFromConfig', () => {
 
   it('delivers plugin notices emitted during startup to onNotice', async () => {
     const { root, home } = await project({ plugins: ['./.leo/plugins/srv.mjs'] })
-    await mkdir(join(root, '.leo', 'plugins'), { recursive: true })
     await writeFile(join(root, '.leo', 'plugins', 'srv.mjs'), `export default { name: 'srv', apply(ctx) { ctx.emit('plugin/notice', { plugin: 'srv', message: 'listening on http://127.0.0.1:1' }) } }`)
     const notices: unknown[] = []
     const app = await createLeoFromConfig({ cwd: root, userDir: home, env: {}, onNotice: (n) => notices.push(n) })

@@ -1,30 +1,21 @@
 /**
- * 最小示例：一个带工具的 Agent，流式输出。
+ * 最小示例：一个带工具的 Agent，流式输出（MockProvider 离线演示）。
  *
- *   npm run build
- *   DEEPSEEK_API_KEY=sk-xxx npm run example:basic      # 真实模型（任意 OpenAI 兼容端点）
- *   npm run example:basic                              # 未设置 key 时使用 MockProvider 离线演示
+ *   npm run build && npm run example:basic
  *
- * 可用环境变量：LEO_BASE_URL（默认 https://api.deepseek.com/v1）、LEO_MODEL（默认 deepseek-chat）
+ * 底座不内置任何模型厂商。接真实模型：装模型供应商插件（leo-plugin 的 provider + provider-deepseek），
+ * 或者用 createLeoFromConfig() 读取 ~/.leo 里已安装的插件；也可以自己实现 LlmProvider 再 providerPlugin(p) 挂上去。
  */
-import { createLeo, defineTool, MockProvider, OpenAICompatibleProvider, z } from 'leo-agents'
+import { createLeo, defineTool, MockProvider, z } from 'leo-agents'
 import type { LlmProvider } from 'leo-agents'
 
-const apiKey = process.env.DEEPSEEK_API_KEY ?? process.env.LEO_API_KEY
-const provider: LlmProvider = apiKey
-  ? new OpenAICompatibleProvider({
-      id: 'remote',
-      baseURL: process.env.LEO_BASE_URL ?? 'https://api.deepseek.com/v1',
-      apiKey,
-      models: [{ id: process.env.LEO_MODEL ?? 'deepseek-chat', contextWindow: 128_000 }],
-    })
-  : new MockProvider({
-      id: 'remote',
-      script: [
-        { text: '我来查一下时间。', toolCalls: [{ name: 'current_time', arguments: { timezone: 'Asia/Shanghai' } }] },
-        (req) => ({ text: `现在上海时间是 ${JSON.stringify(req.messages.at(-1)?.content)}（离线演示）。` }),
-      ],
-    })
+const provider: LlmProvider = new MockProvider({
+  id: 'remote',
+  script: [
+    { text: '我来查一下时间。', toolCalls: [{ name: 'current_time', arguments: { timezone: 'Asia/Shanghai' } }] },
+    (req) => ({ text: `现在上海时间是 ${JSON.stringify(req.messages.at(-1)?.content)}（离线演示）。` }),
+  ],
+})
 
 const leo = await createLeo({ providers: [provider], logLevel: 'warn' })
 
@@ -38,7 +29,7 @@ leo.ctx.get('tools').register(
 )
 
 const agent = leo.createAgent({
-  model: `remote/${process.env.LEO_MODEL ?? 'deepseek-chat'}`,
+  model: 'remote/demo',
   systemPrompt: '你是一个简洁的中文助手。需要时调用工具。',
   limits: { maxSteps: 10, turnTimeoutMs: 120_000 },
 })

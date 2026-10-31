@@ -118,7 +118,7 @@ export const HELP = `leo — 通用 Agent（leo-agents 底座自带的命令行�
   -l, --project, --local      leo plugin / leo auth 作用于当前项目的 .leo/（默认 ~/.leo）
   -h, --help / -v, --version
 
-内置提供方：deepseek, openai, qwen, moonshot, zhipu, siliconflow, openrouter, ollama
+模型供应商由插件提供：leo plugin add provider && leo plugin add provider-deepseek
 （设置对应环境变量如 DEEPSEEK_API_KEY 即自动启用；其他 OpenAI 兼容端点在 .leo/config.json 中配置）
 
 交互模式命令：/help /new /model <p/m> /models /plugins [reload] /session /exit`

@@ -73,6 +73,30 @@ export interface LlmProvider {
   countTokens?(request: LlmRequest): number | Promise<number>
   /** 可选：模型元信息（上下文窗口、价格），用于预算与计费 */
   getModelInfo?(model: string): ModelInfo | undefined
+  /** 可选：显示名（`leo models` / `leo doctor` 展示），如 “DeepSeek” */
+  readonly name?: string
+  /** 可选：未指定模型时用的模型 id（不带前缀）。宿主没配置 `model` 时，默认 provider 的这个模型就是默认模型 */
+  readonly defaultModel?: string
+  /** 可选：已知模型列表（`leo models` 展示） */
+  listModels?(): ModelInfo[]
+  /**
+   * 可选：当前是否可用及原因（例如缺密钥）。不提供视为可用。
+   * 不可用的 provider 仍可注册（这样 `leo doctor` 能看到它缺什么），但不会被选作默认模型
+   */
+  status?(): ProviderStatusInfo
+}
+
+/** provider 自己汇报的状态（见 `LlmProvider.status`） */
+export interface ProviderStatusInfo {
+  ready: boolean
+  /** 不可用的原因，如 “no API key” */
+  reason?: string
+  /** 端点地址，仅展示 */
+  baseURL?: string
+  /** 密钥情况（脱敏），仅展示 */
+  credential?: { configured: boolean; masked: string; source?: string }
+  /** 由哪个插件 / 驱动提供，仅展示，如 “provider-deepseek” */
+  via?: string
 }
 
 export interface ResolvedModel {

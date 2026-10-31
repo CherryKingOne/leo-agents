@@ -1,5 +1,21 @@
 # 更新日志
 
+## 0.2.0 — 2026-10-31
+
+> 在 `feat/provider-plugin` 分支发布，未合并到 main。需要配合 leo-plugin 的 `provider` 与 `provider-deepseek` 插件使用。
+
+**破坏性变更：模型供应商插件化，底座不再内置任何模型厂商。**
+
+- 移除 `PROVIDER_PRESETS`（DeepSeek / OpenAI / 通义 / Kimi / 智谱 / SiliconFlow / OpenRouter / Ollama 预设）、`OpenAICompatibleProvider`、`parseSSE`、`providerKinds` 服务、`openaiCompatible()` / `deepseek()` 等辅助函数，以及按密钥自动探测厂商。它们移到 leo-plugin 的 `provider`（注册层，自带通用 OpenAI 兼容协议）与 `provider-deepseek`（DeepSeek 子插件）
+- 保留接缝：`llm` 服务、`LlmProvider` 接口、`llm/stream` 中间件、`providerPlugin()`（从 providers 目录移到 llm）、`MockProvider`
+- `LlmProvider` 新增可选 `name`、`defaultModel`、`listModels()`、`status()`；`leo models` / `leo doctor` 显示插件注册的 provider、密钥来源和提供它的插件；不可用（如缺密钥）的 provider 不会被选为默认模型
+- 新增服务 `leoConfig`（合并后的 `.leo/config.json`，只读）：供应商插件读取 `model` 与 0.1.x 的 `providers`，旧配置装上插件后照常生效。`providers` 的值底座不再校验
+- `toLeoError` 识别插件抛的错误：带 `Symbol.for('leo.error')` 标记（导出为 `LEO_ERROR_MARK`）或 `name === 'LeoError'`、且 `code` 合法时保留 code / status / retryAfterMs（插件不能运行时 import leo-agents）。之前这类错误一律当 network 重试
+- `LeoApp.model` / `LeoApp.providers` / `agentFactory.defaultModel` 改为每次读取时计算，供应商插件热加载后随之变化
+- `leo init` 不再列内置厂商，只问密钥并提示安装 `provider` / `provider-deepseek`；没有模型时按“没装注册层”“没有驱动”“缺密钥”分别提示
+- `.leo/config.json` 模板不再写 `providers`
+- `credentials` 服务的类型声明移到 `config/create.ts`
+
 ## 0.1.2 — 2026-10-31
 
 0.1.2 让 leo 能**常驻运行插件**：`leo serve` 后台在线、插件可按宿主配置创建 Agent、插件能给用户发提示，卸载时可清理插件写入的凭据。消息网关（gateway 0.2.x）及其 QQ / 飞书子插件依赖这些能力。
