@@ -56,4 +56,5 @@ npm run example:plugin    # 插件开发示例
 
 📘 开发文档（插件协议、注册方式、扩展点、二次开发）：[docs/development-guide.md](docs/development-guide.md)
 📄 架构规划：[docs/architecture-plan.md](docs/architecture-plan.md)
+🔁 时序流程图（启动、对话循环、模型调用、工具执行、热加载、leo serve）：[docs/sequence-diagrams.md](docs/sequence-diagrams.md)
 🔎 配置方案调研（DeepSeek Harness / pi）：[docs/config-research.md](docs/config-research.md)
