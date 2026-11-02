@@ -682,7 +682,7 @@ ctx.get('tools').register({
 |---|---|---|
 | `text` | `text` | 原样输出 |
 | `ansi` | `lines`、`fallback?` | 支持颜色时逐行输出，否则输出 `fallback` |
-| `image` | `url`、`alt?`、`mimeType?` | 输出一行 `🖼 alt url`（终端不能显示图片） |
+| `image` | `url`、`alt?`、`mimeType?` | 输出一行 `🖼 alt url`（终端不能显示图片）；同一组里已画出字符画时省略 |
 
 前端不认识的类型应忽略。`AgentEvent` 的 `tool_result` 事件里 `result.display` 即为展示块，网关等前端据此发送图片。
 

@@ -48,13 +48,19 @@ export async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8')
 }
 
-/** 终端渲染展示块：字符画只在支持颜色的终端输出，否则显示 fallback；图片显示说明与地址 */
+/**
+ * 终端渲染展示块：字符画只在支持颜色的终端输出，否则显示 fallback；
+ * 图片终端显示不了，输出一行说明与地址——同一组里已经画出字符画时不再输出图片行
+ */
 export function renderDisplay(blocks: readonly import('../protocol/display.js').DisplayBlock[], stream: { isTTY?: boolean; write(s: string): unknown } = process.stdout): void {
+  let drawn = false
   for (const b of blocks) {
     if (b.type === 'text') stream.write(`${b.text}\n`)
     else if (b.type === 'ansi') {
-      if (useColor(stream)) stream.write(`${b.lines.join('\n')}\x1b[0m\n`)
-      else if (b.fallback) stream.write(`${b.fallback}\n`)
-    } else if (b.type === 'image') stream.write(`${c.gray(`🖼 ${b.alt ? `${b.alt} ` : ''}${b.url}`, stream)}\n`)
+      if (useColor(stream)) {
+        stream.write(`${b.lines.join('\n')}\x1b[0m\n`)
+        drawn = true
+      } else if (b.fallback) stream.write(`${b.fallback}\n`)
+    } else if (b.type === 'image' && !drawn) stream.write(`${c.gray(`🖼 ${b.alt ? `${b.alt} ` : ''}${b.url}`, stream)}\n`)
   }
 }
