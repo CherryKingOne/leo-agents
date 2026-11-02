@@ -7,6 +7,7 @@
  * - session  只追加会话日志
  * - tools    工具注册表与受控执行管线
  * - context  上下文构建、token 预算、压缩
+ * - commands 插件斜杠命令（人触发，不经过模型）
  * - loop     通用 Agent Loop
  * - config   .leo 配置、密钥、createLeoFromConfig（开箱即用）
  */
@@ -17,6 +18,7 @@ export * from './llm/index.js'
 export * from './session/index.js'
 export * from './tools/index.js'
 export * from './context/index.js'
+export * from './commands/index.js'
 export * from './loop/index.js'
 export * from './config/index.js'
 export * from './leo.js'

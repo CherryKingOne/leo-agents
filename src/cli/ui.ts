@@ -47,3 +47,14 @@ export async function readStdin(): Promise<string> {
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
   return Buffer.concat(chunks).toString('utf8')
 }
+
+/** 终端渲染展示块：字符画只在支持颜色的终端输出，否则显示 fallback；图片显示说明与地址 */
+export function renderDisplay(blocks: readonly import('../protocol/display.js').DisplayBlock[], stream: { isTTY?: boolean; write(s: string): unknown } = process.stdout): void {
+  for (const b of blocks) {
+    if (b.type === 'text') stream.write(`${b.text}\n`)
+    else if (b.type === 'ansi') {
+      if (useColor(stream)) stream.write(`${b.lines.join('\n')}\x1b[0m\n`)
+      else if (b.fallback) stream.write(`${b.fallback}\n`)
+    } else if (b.type === 'image') stream.write(`${c.gray(`🖼 ${b.alt ? `${b.alt} ` : ''}${b.url}`, stream)}\n`)
+  }
+}

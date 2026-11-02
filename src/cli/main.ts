@@ -12,13 +12,13 @@ import { loadConfig } from '../config/load.js'
 import { maskSecret, readCredentialFile, writeCredential } from '../config/secrets.js'
 import { LeoError } from '../errors.js'
 import type { Agent, AgentEvent } from '../loop/types.js'
-import { textOf } from '../protocol/messages.js'
+import { textOf, type UserInput } from '../protocol/messages.js'
 import type { ApprovalService } from '../tools/types.js'
 import { type CliArgs, HELP, parseArgs } from './args.js'
 import { collectModels, describeModel, describeReasoning, type ModelChoice, parseEffort, parseSwitch, withEffort, withThinking } from './models.js'
 import type { ReasoningOptions } from '../llm/types.js'
 import { addPlugin, DEFAULT_PLUGIN_REGISTRY, defaultIo, initPlugin, loadRegistry, uninstallPlugin } from './plugin.js'
-import { askSecret, c, makeRl, oneLine, readStdin } from './ui.js'
+import { askSecret, c, makeRl, oneLine, readStdin, renderDisplay } from './ui.js'
 
 const out = process.stdout
 const err = process.stderr
@@ -468,6 +468,8 @@ function render(ev: AgentEvent, args: CliArgs, state: { midLine: boolean; reason
     case 'tool_result': {
       const text = oneLine(textOf(ev.result.content), 200)
       log(ev.result.isError ? c.red(`  ✗ ${text}`) : c.gray(`  ✓ ${text}`))
+      // 工具给用户看的展示块（表情、图片……）：--json 模式不渲染
+      if (ev.result.display?.length && !args.json) renderDisplay(ev.result.display, out)
       break
     }
     case 'retry':
@@ -492,7 +494,7 @@ function render(ev: AgentEvent, args: CliArgs, state: { midLine: boolean; reason
   }
 }
 
-async function runTurn(agent: Agent, input: string, args: CliArgs, rl: Interface | undefined): Promise<boolean> {
+async function runTurn(agent: Agent, input: UserInput, args: CliArgs, rl: Interface | undefined): Promise<boolean> {
   const state = { midLine: false, reasoning: false }
   let ok = true
   const onSigint = () => {
@@ -647,7 +649,17 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
       if (line.startsWith('/')) {
         const [cmd, ...rest] = line.slice(1).split(/\s+/)
         if (cmd === 'exit' || cmd === 'quit') break
-        if (cmd === 'help') log(HELP.slice(HELP.indexOf('交互模式命令')))
+        if (cmd === 'help') {
+          log(HELP.slice(HELP.indexOf('交互模式命令')))
+          const extra = app.leo.ctx.maybe('commands')?.list() ?? []
+          if (extra.length) {
+            log('\n插件命令：')
+            for (const d of extra) {
+              const head = `/${d.name}${d.usage ? ` ${d.usage}` : ''}`
+              log(`  ${head.padEnd(27)} ${d.description ?? ''}${d.plugin ? c.gray(`（${d.plugin}）`) : ''}`)
+            }
+          }
+        }
         else if (cmd === 'new') {
           await agent.dispose()
           agent = newAgent()
@@ -735,7 +747,16 @@ async function cmdRun(cwd: string, args: CliArgs): Promise<number> {
           if (!list.length) log(c.gray('  （没有加载第三方插件）'))
           for (const p of list) log(`  ${p.name} ${c.gray(p.spec)}`)
         } else if (cmd === 'session') log(`会话 ${agent.sessionId}（leo -s ${agent.sessionId} 可恢复）`)
-        else log(c.yellow(`未知命令 /${cmd}，输入 /help`))
+        else {
+          // 插件注册的斜杠命令（commands 服务）
+          const r = await app.leo.ctx.maybe('commands')?.run(cmd!, { args: rest.join(' '), surface: 'cli', sessionId: agent.sessionId })
+          if (!r) log(c.yellow(`未知命令 /${cmd}，输入 /help`))
+          else {
+            if (r.text) log(r.isError ? c.red(r.text) : r.text)
+            if (r.display?.length) renderDisplay(r.display, out)
+            if (r.prompt !== undefined && !r.isError) await runTurn(agent, r.prompt, args, rl)
+          }
+        }
         continue
       }
       await runTurn(agent, line, args, rl)

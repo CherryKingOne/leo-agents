@@ -1,5 +1,15 @@
 # 更新日志
 
+## 0.2.1 — 2026-11-02
+
+0.2.1 给插件补上**和人互动**的两个通用接口：插件能注册斜杠命令，工具结果能带给用户看的展示内容。互动插件 `interaction`（人设、表情包）依赖它们。
+
+### 新增
+
+- `commands` 核心服务：插件用 `ctx.get('commands').register({ name, aliases?, usage?, description?, run })` 注册斜杠命令；交互式 `leo` 输入 `/<name>` 执行，`/help` 列出插件命令，内置命令优先。结果可带 `text`、`display`、`isError`，以及 `prompt`（作为用户消息发给当前 Agent 开始一轮对话）。执行后发出 `commands/executed`
+- 展示块 `DisplayBlock`（`text` / `ansi` / `image`）：`ToolOutput.display` → `ToolResult.display` → `tool_result` 事件，写入会话日志 `meta.display`，不发给模型。交互式 `leo` 渲染：支持颜色的终端输出字符画（否则输出 `fallback`），图片输出说明与地址；`--json` 模式不渲染
+- 导出 `isDisplayBlocks`、`commandsPlugin` 及相关类型（`CommandService`、`CommandDefinition`、`CommandResult`、`DisplayBlock`）
+
 ## 0.2.0 — 2026-10-31
 
 > 需要配合 leo-plugin 的 `provider` 与 `provider-deepseek` 插件（0.2.0）使用。

@@ -445,6 +445,7 @@ function toolMessage(r: ToolResult): AgentMessage {
     meta: { durationMs: r.durationMs, ...(r.errorCode ? { errorCode: r.errorCode } : {}) },
   }
   if (r.details !== undefined) m.meta!.details = r.details
+  if (r.display?.length) m.meta!.display = r.display
   return m
 }
 

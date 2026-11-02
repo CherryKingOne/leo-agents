@@ -1,3 +1,4 @@
+import type { DisplayBlock } from '../protocol/display.js'
 import type { z } from 'zod'
 import type { Context } from '../kernel/context.js'
 import type { Logger } from '../kernel/logger.js'
@@ -53,6 +54,8 @@ export interface ToolOutput {
   terminate?: boolean
   /** 不发送给模型的结构化数据（UI、审计） */
   details?: unknown
+  /** 给用户看、不发给模型的展示块（表情、图片、字符画），由前端渲染 */
+  display?: DisplayBlock[]
 }
 
 export interface ToolDefinition<A = any, R = any> {
@@ -86,6 +89,8 @@ export interface ToolResult {
   isError: boolean
   terminate: boolean
   details?: unknown
+  /** 给用户看的展示块（见 ToolOutput.display） */
+  display?: DisplayBlock[]
   /** 基础设施错误码（tool_not_found / tool_invalid_args / tool_denied / tool_timeout / tool_error / cancelled） */
   errorCode?: string
   durationMs: number
