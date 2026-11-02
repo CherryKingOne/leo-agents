@@ -1,3 +1,4 @@
+import { isDisplayBlocks } from '../protocol/display.js'
 import { z } from 'zod'
 import { LeoError, toLeoError } from '../errors.js'
 import type { Context } from '../kernel/context.js'
@@ -287,6 +288,7 @@ export class DefaultToolRegistry implements ToolRegistry {
       durationMs: ms,
     }
     if (out.details !== undefined) res.details = out.details
+    if (isDisplayBlocks(out.display) && out.display.length) res.display = out.display
     return res
   }
 }

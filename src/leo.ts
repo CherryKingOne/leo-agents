@@ -1,3 +1,4 @@
+import { commandsPlugin } from './commands/registry.js'
 import { contextPlugin } from './context/builder.js'
 import type { TokenBudgetOptions } from './context/types.js'
 import { type Context, Kernel, type PluginRuntime } from './kernel/context.js'
@@ -46,7 +47,7 @@ export interface Leo {
 }
 
 /**
- * 创建一个 leo 实例：内核 + 核心插件（sessions / llm / tools / context / agentLoop）+ 你的插件。
+ * 创建一个 leo 实例：内核 + 核心插件（sessions / llm / tools / context / agentLoop / commands）+ 你的插件。
  *
  * ```ts
  * import provider from 'leo-plugin-provider'
@@ -68,6 +69,7 @@ export async function createLeo(opts: CreateLeoOptions = {}): Promise<Leo> {
     await root.plugin(toolsPlugin, opts.tools)
     await root.plugin(contextPlugin, opts.context)
     await root.plugin(agentLoopPlugin)
+    await root.plugin(commandsPlugin)
   }
   for (const [i, p] of (opts.providers ?? []).entries()) await root.plugin(providerPlugin(p, { default: i === 0 }))
   for (const entry of opts.plugins ?? []) {

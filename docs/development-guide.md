@@ -498,6 +498,7 @@ const consumer = definePlugin({
 | `tools` | `ToolRegistry` | `DefaultToolRegistry` |
 | `context` | `ContextService` | 分层 prompt + token 预算 + 压缩 |
 | `agentLoop` | `AgentLoopService` | `DefaultAgent` |
+| `commands` | `CommandService` | 插件斜杠命令注册表（0.2.1 起），交互式 `leo` 与网关等前端分发 |
 | `approval`（可选） | `ApprovalService` | 无（未提供时 `ask` 决策一律拒绝） |
 | `leoPaths`（可选） | `LeoPaths` | `createLeoFromConfig` 提供：当前目录、项目根、`.leo`、`~/.leo` |
 
@@ -654,6 +655,60 @@ definePlugin({
   },
 })
 ```
+
+
+### 7.5 给用户看的展示块（display）
+
+工具结果里的 `content` 发给模型；**`display` 只给人看**（表情、图片、终端字符画），不进模型上下文，写入会话日志 `meta.display`。0.2.1 起支持。
+
+```ts
+ctx.get('tools').register({
+  name: 'send_sticker',
+  description: '在合适的时候发一张表情',
+  parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+  execute: ({ id }) => id,
+  // render 可以返回带 display 的 ToolOutput（插件运行时不 import leo-agents，返回普通对象即可）
+  render: (id) => ({
+    content: `已发送表情：${id}`,
+    display: [
+      { type: 'ansi', lines: ansiArt[id], fallback: `[表情] ${id}` }, // 支持颜色的终端显示字符画
+      { type: 'image', url: `https://example.com/${id}.png`, alt: id }, // 聊天平台 / Web 显示图片
+    ],
+  }),
+})
+```
+
+| 类型 | 字段 | 交互式 `leo` 的渲染 |
+|---|---|---|
+| `text` | `text` | 原样输出 |
+| `ansi` | `lines`、`fallback?` | 支持颜色时逐行输出，否则输出 `fallback` |
+| `image` | `url`、`alt?`、`mimeType?` | 输出一行 `🖼 alt url`（终端不能显示图片）；同一组里已画出字符画时省略 |
+
+前端不认识的类型应忽略。`AgentEvent` 的 `tool_result` 事件里 `result.display` 即为展示块，网关等前端据此发送图片。
+
+### 7.6 斜杠命令（commands 服务）
+
+人触发、不经过模型的命令。插件注册后，交互式 `leo` 输入 `/<name>` 即执行，`/help` 会列出全部插件命令；内置命令（`/model`、`/think` 等）优先。0.2.1 起支持，旧宿主上用 `ctx.maybe('commands')` 判断。
+
+```ts
+const commands = ctx.maybe('commands')
+if (commands) {
+  await ctx.effect(() =>
+    commands.register({
+      name: 'sticker',
+      usage: '<id>',
+      description: '发送一个表情',
+      run: ({ argv, surface, sessionId }) => ({
+        display: [{ type: 'ansi', lines: ansiArt[argv[0]], fallback: `[表情] ${argv[0]}` }],
+        // 可选：作为用户消息发给当前 Agent，让模型接话
+        prompt: `[用户发了表情：${argv[0]}]`,
+      }),
+    }),
+  )
+}
+```
+
+`run` 可以返回字符串（等价于 `{ text }`）或 `CommandResult`：`text`、`display`、`isError`、`prompt`。抛出的错误会变成 `{ text: 错误信息, isError: true }`。执行后发出 `commands/executed` 事件。
 
 ---
 
