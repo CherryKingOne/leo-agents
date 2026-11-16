@@ -96,7 +96,7 @@ console.log(r.text, r.reason, r.usage)
 开发与测试：
 
 ```bash
-npm test              # 45 个用例：内核、loop、工具管线、OpenAI 适配器、会话、配置/密钥/内置工具/第三方插件
+npm test              # 95 个用例：内核、loop、工具管线、会话与轨迹记录、配置/密钥/内置工具/第三方插件、热加载、命令
 npm run build
 npm run example:basic # 未设置 API Key 时用 MockProvider 离线演示
 ```
@@ -911,6 +911,7 @@ prompt(input)
 | `label` | 给人看的名字（如 `sub-agent:explorer`）。CLI 审批提示会显示它，用来区分是哪个 Agent 发起的 |
 | `limits` | `{ maxSteps=50, maxTurnTokens, maxTurnCostUsd, turnTimeoutMs }` |
 | `retry` | `{ maxAttempts=4, baseDelayMs=1000, maxDelayMs=30000 }` |
+| `sessionMeta` | 0.2.2，可选：会话元信息 `{ origin?, label?, parentSessionId?, parentAgentId?, parentTurnId?, parentToolCallId?, extra? }`。新会话第一个 turn 前写入一条 `session/meta`（见 11.1） |
 
 `prompt()` / `run()` 的第二个参数可覆盖 limits，并传入外部 `signal`。
 
@@ -974,8 +975,10 @@ for await (const ev of agent.prompt('...')) {
 | `turn/start` / `turn/end` | turn 边界、结束原因、用量、错误 |
 | `message` | 用户 / assistant / 工具消息 |
 | `llm/request` | 本次请求的 system 文本、按顺序参与的 message id、工具名、参数、fingerprint、估算 token |
-| `llm/response` | 响应消息 id、finishReason、用量（含成本）、尝试次数 |
-| `llm/attempt-failed` | 每次失败的尝试 |
+| `llm/response` | 响应消息 id、finishReason、用量（含成本）、尝试次数；0.2.2 起可选 `startedAt`、`firstTokenAt` |
+| `llm/attempt-failed` | 每次失败的尝试；0.2.2 起可选 `startedAt` |
+| `tool/start` / `tool/end` | 0.2.2：工具真正开始 / 结束执行（见 11.1） |
+| `session/meta` | 0.2.2：会话元信息（父会话、来源、名字） |
 | `compaction` | 压缩摘要与切分点 |
 | `custom` | 插件自定义数据：`sessions.append(id, 'custom', { kind, data })` |
 
@@ -986,10 +989,44 @@ for await (const ev of agent.prompt('...')) {
 
 - `InMemorySessionStore`：默认，进程内。
 - `FileSessionStore`：`createLeo({ sessions: { dir: './data/sessions' } })`，每会话一个 JSONL 文件，进程内串行追加。
-- 生产多实例：实现 `SessionStore` 接口（`append` / `events` / `messages` / `delete`）接 Postgres 等，
+- 生产多实例：实现 `SessionStore` 接口（`append` / `events` / `messages` / `delete`，可选 `list`）接 Postgres 等，
   通过插件 `ctx.provide('sessions', new PgSessionStore(...))` 覆盖即可。实现需保证同会话 `seq` 单调、`append` 原子。
+- `list()`（0.2.2，**可选方法**）：返回 `SessionInfo[]`（`sessionId`、`createdAt`、`updatedAt`、`events` 条数、`meta`），按 `updatedAt` 倒序。
+  内存与文件存储都已实现（文件存储扫描目录、读出每个 JSONL，跳过坏文件）；第三方存储可以不实现，调用方先判断 `typeof store.list === 'function'`。
+  `sessionInfoOf(sessionId, events)` 可帮自定义存储算出同样的结果。
 
 > 会话锁目前是进程内的。多实例部署时，请在网关层按 sessionId 做粘性路由，或在你的 `SessionStore` 中实现分布式锁。
+
+### 11.1 轨迹记录（0.2.2）
+
+为了让轨迹观测插件（leo-plugin 的 `trajectory`）能还原“每一步花了多久、谁调了谁”，0.2.2 在日志里**只新增**以下内容，
+旧字段、旧事件不变。读取方应忽略不认识的事件类型和字段，并接受旧日志里没有这些数据。
+
+| 记录 | 何时写 | 内容 |
+|---|---|---|
+| `tool/start` | 工具通过预检 / 审批 / 守卫、真正开始执行时 | `{ turnId, stepId, callId, name, messageId, at }`。参数不重复存，在 `messageId` 那条 assistant 消息的 tool_call 块里 |
+| `tool/end` | 工具执行结束（含 `tools/post-execute`）时 | `{ turnId, stepId, callId, name, isError, errorCode?, terminate?, durationMs, startedAt, endedAt }`。结果本体仍是随后的 `message`（role: tool） |
+| `llm/response.startedAt` | — | 成功那次尝试的开始时间；`llm/request.at` 到它之间是失败尝试与退避等待 |
+| `llm/response.firstTokenAt` | — | 该次尝试第一个增量（文本 / 思考 / 工具调用）到达的时间。TTFT = `firstTokenAt - startedAt`，解码时间 = `at - firstTokenAt` |
+| `llm/attempt-failed.startedAt` | — | 失败那次尝试的开始时间 |
+| `session/meta` | 传了 `AgentOptions.sessionMeta` 时，新会话第一个 turn 前写一次（会话里已有就不再写） | `SessionMeta`：`origin`（`'main' \| 'sub-agent' \| 'team-member' \| 字符串`）、`label`（缺省取 `AgentOptions.label`）、`parentSessionId`、`parentAgentId`、`parentTurnId`、`parentToolCallId`、`extra`，loop 补上 `agentId`、`model` |
+
+说明与取舍：
+
+- **没有单独的 `step/start`**：step 的起点就是 `llm/request` 的 `at`（上下文已构建好、请求即将发出）。
+- 预检阶段就被拒绝的调用（找不到工具、参数不合法、审批拒绝、守卫拦截、取消）**没有** `tool/start` / `tool/end`，只有 `isError` 的工具结果消息，`meta.errorCode` 说明原因。
+- `tool/start` / `tool/end` 写在工具结果消息之前；同一批并发工具的 start/end 会交错，按 `callId` 配对。
+- 写入通过 `BatchContext.onStart`（现在会被 await）与新增的 `BatchContext.onEnd` 回调完成；轨迹记录写失败只打警告，不影响 turn。
+  自己替换了 `tools` 服务的实现，如果不调用这两个回调，就不会有工具时间记录，其他照常。
+- 不传 `sessionMeta` 时不写 `session/meta`，日志形状与 0.2.1 完全一样。子 Agent / 团队插件建议传：
+
+```ts
+const child = ctx.get('agentLoop').create({
+  model,
+  label: 'sub-agent:explorer',
+  sessionMeta: { origin: 'sub-agent', parentSessionId: exec.sessionId, parentAgentId: exec.agentId, parentTurnId: exec.turnId, parentToolCallId: exec.callId },
+})
+```
 
 ---
 

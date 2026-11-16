@@ -220,7 +220,11 @@ export class DefaultToolRegistry implements ToolRegistry {
     const { call, tool, args } = p
     const started = Date.now()
     if (batch.signal.aborted) return errorResult(call, 'cancelled', 'Cancelled before execution', 0)
-    batch.onStart?.(call)
+    try {
+      await batch.onStart?.(call)
+    } catch (err) {
+      this.ctx.logger.warn({ err, tool: tool.name }, 'tool onStart callback failed')
+    }
     const attempts = 1 + (tool.idempotent ? (tool.maxRetries ?? 0) : 0)
     let result: ToolResult | undefined
     for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -233,6 +237,11 @@ export class DefaultToolRegistry implements ToolRegistry {
       final = await this.ctx.waterfall('tools/post-execute', { tool, args, call, result: final }, (x) => x.result)
     } catch (err) {
       final = errorResult(call, 'tool_error', `Post-processing failed: ${toLeoError(err).message}`, Date.now() - started)
+    }
+    try {
+      await batch.onEnd?.(final, { call, startedAt: started, endedAt: Date.now() })
+    } catch (err) {
+      this.ctx.logger.warn({ err, tool: tool.name }, 'tool onEnd callback failed')
     }
     return final
   }

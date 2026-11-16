@@ -49,7 +49,7 @@ for await (const ev of agent.prompt('2+3 等于几？')) if (ev.type === 'text_d
 ```
 
 ```bash
-npm test                  # 79 个用例
+npm test                  # 95 个用例
 npm run example:basic     # 无 API Key 时离线演示
 npm run example:plugin    # 插件开发示例
 ```
