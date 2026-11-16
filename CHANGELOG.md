@@ -1,5 +1,15 @@
 # 更新日志
 
+## 0.3.0 — 2026-11-16
+
+**破坏性变更：项目已彻底使用 Rust 重写。**
+
+- 删除全部 TypeScript 源码与 npm 构建配置，改为 Cargo 工作区（crate `leo-agents`，二进制 `leo`）
+- 目录结构保持一一对应：`src/kernel`、`src/protocol`、`src/llm`、`src/session`、`src/tools`、`src/context`、`src/commands`、`src/loop`、`src/config`、`src/cli`
+- 插件内核、Agent Loop、工具管线、上下文压缩、会话日志、.leo 配置、密钥、插件仓库与 CLI 均移植为 Rust
+- 插件改为原生 Rust 插件（实现 `Plugin`）；`.js/.mjs/.ts` 动态插件不再可直接执行，可自定义 `PluginLoader`
+- 测试从 `test/*.test.ts` 迁移到 `tests/*.rs`，`cargo test` 全绿
+
 ## 0.2.1 — 2026-11-02
 
 0.2.1 给插件补上**和人互动**的两个通用接口：插件能注册斜杠命令，工具结果能带给用户看的展示内容。互动插件 `interaction`（人设、表情包）依赖它们。

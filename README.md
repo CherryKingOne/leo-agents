@@ -1,60 +1,78 @@
-# leo-agents
+# leo-agents (Rust)
 
-一个从零手写、以“一切皆插件”为核心、可直接商用的 TypeScript Agent 底座。
+一个从零手写、以“一切皆插件”为核心、可直接商用的 Rust Agent 底座。
 
-- **插件内核**（借鉴 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) / Cordis）：服务仓库、五种分发模式的类型化事件、可撤销副作用、依赖注入与热重载
+- **插件内核**：服务仓库、五种分发模式的类型化事件、可撤销副作用、依赖注入与热重载
 - **通用 Agent Loop**：流式输出、并发工具执行、指数退避重试、上下文溢出自动压缩、steer / followUp、取消与超时、步数 / token / 成本预算、会话锁、只追加可回放日志
-- **工具管线**：zod 参数校验、策略钩子（allow / deny / ask）、审批服务、单调守卫、超时与重试、结果后处理
-- **模型接入即插件**：底座不内置任何厂商，只留 `llm` 接缝；模型由供应商插件接入——注册层 `provider`（自带通用 OpenAI 兼容协议，任意兼容端点写 baseURL 即可）+ 厂商子插件（`provider-deepseek`，以后的通义、Kimi……）
+- **工具管线**：JSON Schema 参数校验、策略钩子（allow / deny / ask）、审批服务、单调守卫、超时与重试、结果后处理
+- **模型接入即插件**：底座不内置任何厂商，只留 `llm` 接缝；模型由供应商插件接入
 - **`.leo` 配置**：`~/.leo` 与项目 `.leo/` 两级，`credentials.json` 存密钥（支持 `$ENV` / `!command`），配置非法即报错
 - **开箱即用的 `leo` 命令行**：交互 / 一次性 / 管道，内置文件、搜索、bash、网页工具，写入与执行默认需确认
-- **开发体验**（借鉴 [pi](https://github.com/earendil-works/pi)）：一个函数就是一个插件
 
-我们只做底层；工具、记忆、渠道、编排方式由你用插件拼装，或克隆后自行定制。不过底座本身开箱就能跑、能干活：
+## 目录结构
+
+```text
+src/
+  kernel/       插件运行时：服务 / 事件 / 可撤销副作用
+  protocol/     厂商无关的消息协议
+  llm/          模型接缝（llm 服务、LlmProvider、providerPlugin）+ Mock Provider
+  session/      只追加会话日志（内存 / JSONL）
+  tools/        工具注册表、受控执行管线、内置工具
+  context/      上下文构建、token 预算、压缩
+  commands/     插件斜杠命令
+  loop/         通用 Agent Loop
+  config/       .leo 配置、密钥、create_Leo_from_config、热重载
+  cli/          leo 命令行
+examples/       离线示例
+test/           已移除（测试迁移到 tests/）
+tests/          Rust 集成测试
+```
+
+## 构建与测试
 
 ```bash
-npm install && npm link          # install 时自动构建，link 后得到 leo 命令
-chmod +x dist/cli/main.js        # 命令授权
-leo plugin add provider          # 模型供应商注册层（底座不内置厂商）
-leo plugin add provider-deepseek # DeepSeek 子插件
-leo auth set deepseek            # 保存密钥到 ~/.leo/credentials.json（或 export DEEPSEEK_API_KEY=...）
-cd your-project && leo           # 交互式 Agent：读写文件、搜索、执行命令、抓网页（写入/执行前会询问）
-leo -p -y "跑测试，失败就修"       # 一次性执行
-leo serve                        # 后台常驻：只加载插件并保持在线（如 leo plugin add gateway 后接入 Telegram / 飞书 / QQ）
-leo init                         # 在项目里创建 .leo/config.json，配置模型、插件、工具、预算
-leo plugin add mcp               # 全局安装插件，自动生成它的配置文件，运行中的 leo 立即热加载（--project 只装到当前项目；leo plugin remove mcp 默认卸载全局，--project 卸项目，--all 都卸）
+cargo build
+cargo test
+cargo run --example basic
+cargo run --example custom_plugin
+```
+
+## 使用
+
+```rust
+use leo_agents::{create_Leo, CreateLeoOptions};
+use leo_agents::kernel::LogLevel;
+
+let leo = create_Leo(CreateLeoOptions {
+    log_level: Some(LogLevel::Silent),
+    ..Default::default()
+}).await?;
 ```
 
 在代码里使用同一套配置：
 
-```ts
-import { createLeoFromConfig } from 'leo-agents'
-const app = await createLeoFromConfig()                 // 读取 ~/.leo 与 ./.leo
-console.log((await app.createAgent().run('总结 README.md')).text)
+```rust
+use leo_agents::config::{create_Leo_from_config, CreateFromConfigOptions};
+
+let app = create_Leo_from_config(CreateFromConfigOptions::default()).await?;
+let result = app.create_agent(Default::default())?.run("总结 README.md".into(), Default::default()).await?;
 ```
 
-完全手动组装（模型接入也是插件）：
-
-```ts
-import { createLeo, defineTool, z } from 'leo-agents'
-import provider from 'leo-plugin-provider'
-import deepseek from 'leo-plugin-provider-deepseek'
-
-const leo = await createLeo({ plugins: [provider, deepseek] })   // 读取 DEEPSEEK_API_KEY
-leo.ctx.get('tools').register(
-  defineTool({ name: 'add', description: '两数相加', parameters: z.object({ a: z.number(), b: z.number() }), execute: ({ a, b }) => String(a + b) }),
-)
-const agent = leo.createAgent({ model: 'deepseek/deepseek-flash', systemPrompt: '你是一个助手' })
-for await (const ev of agent.prompt('2+3 等于几？')) if (ev.type === 'text_delta') process.stdout.write(ev.text)
-```
+## 命令行
 
 ```bash
-npm test                  # 79 个用例
-npm run example:basic     # 无 API Key 时离线演示
-npm run example:plugin    # 插件开发示例
+cargo run --bin leo -- init
+cargo run --bin leo -- auth set deepseek
+cargo run --bin leo -- models
+cargo run --bin leo -- doctor
+cargo run --bin leo -- -p "跑测试，失败就修"
+cargo run --bin leo -- serve
 ```
 
-📘 开发文档（插件协议、注册方式、扩展点、二次开发）：[docs/development-guide.md](docs/development-guide.md)
-📄 架构规划：[docs/architecture-plan.md](docs/architecture-plan.md)
-🔁 时序流程图（启动、对话循环、模型调用、工具执行、热加载、leo serve）：[docs/sequence-diagrams.md](docs/sequence-diagrams.md)
-🔎 配置方案调研（DeepSeek Harness / pi）：[docs/config-research.md](docs/config-research.md)
+## 插件说明
+
+Rust 版插件是**原生 Rust 插件**：实现 `leo_agents::kernel::Plugin`，在代码中通过 `plugins` 传入或通过 `.leo/config.json` 的 `plugins` 由宿主注册的 loader 构造。
+
+`.leo/config.json` 的插件路径、`leo plugin add/remove`、插件仓库与配置文件模板逻辑均已保留；但 Node.js 的 `.js/.mjs/.ts` 插件无法在 Rust 运行时里直接执行，动态加载请使用 Rust 原生插件或自行实现 `PluginLoader`。
+
+📘 设计文档见 `docs/`。

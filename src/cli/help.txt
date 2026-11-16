@@ -1,0 +1,46 @@
+leo — 通用 Agent（leo-agents 底座自带的命令行）
+
+用法
+  leo                         交互式对话（在当前目录工作）
+  leo "任务描述"               执行一个任务后进入交互
+  leo -p "任务描述"            只执行一次就退出（适合脚本 / CI，可配合管道）
+  cat log.txt | leo -p "分析这段日志"
+
+命令
+  leo init                    在当前目录创建 .leo/（配置模板、.gitignore 规则），可顺便保存密钥
+  leo auth set <provider> [key] [--project]   保存密钥（默认 ~/.leo，--project 存到 ./.leo）
+  leo auth list | remove <provider>
+  leo models [provider] [--offline]
+                              查看可用的提供方与全部模型
+  leo doctor                  诊断：配置文件、密钥来源、插件、会话目录
+  leo serve                   后台常驻：不进入对话，只加载配置与插件并保持在线
+  leo plugin list             查看已安装的插件（全局 / 当前项目）与官方插件仓库
+  leo plugin add <id> [--project] [--no-init | --init-from <path>] [--npm]
+                              安装插件
+  leo plugin init <id> [--project] [--init-from <path>] [--force]
+                              给插件初始化配置文件
+  leo plugin remove <id> [--project | --all] [--purge]
+                              卸载插件
+
+选项
+  -m, --model <p/m>           指定模型
+  -y, --yes                   自动批准写文件 / 执行命令
+  -c, --continue              继续最近一次会话
+  -s, --session <id>          继续指定会话
+      --api-key <key>         本次运行使用的密钥
+      --no-tools              不启用内置工具
+      --json                  以 JSONL 输出事件流
+      --hide-thinking         不显示模型的思考过程
+      --thinking <on|off>     开启 / 关闭思考模式
+      --effort <level>        推理强度
+      --max-steps <n>         单次任务最多模型调用次数
+      --cwd <dir>             工作目录
+  -l, --project, --local      leo plugin / leo auth 作用于当前项目的 .leo/
+  -h, --help / -v, --version
+
+交互模式命令：
+  /models                     列出全部模型（编号）及详情
+  /model [<p/m> | <编号>]     查看或切换模型
+  /think [on|off|show|hide]   查看或切换思考模式
+  /effort [<level>]           查看或设置推理强度
+  /new /plugins [reload] /session /help /exit
