@@ -1,4 +1,5 @@
 import type { LeoErrorCode } from '../errors.js'
+import type { ContextBreakdown } from '../context/types.js'
 import type { AgentMessage, Usage } from '../protocol/messages.js'
 
 /**
@@ -36,6 +37,8 @@ export interface SessionEventMap {
     params: Record<string, unknown>
     fingerprint: string
     estimatedTokens: number
+    /** 0.2.3：上下文组成（system 片段、工具定义、消息、窗口与预留），旧日志没有 */
+    breakdown?: ContextBreakdown
   }
   'llm/response': {
     turnId: string

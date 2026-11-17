@@ -405,6 +405,7 @@ export class DefaultAgent implements Agent {
       params,
       fingerprint: built.fingerprint,
       estimatedTokens: built.estimatedTokens,
+      ...(built.breakdown ? { breakdown: built.breakdown } : {}),
     })
 
     const request = {

@@ -974,7 +974,7 @@ for await (const ev of agent.prompt('...')) {
 |---|---|
 | `turn/start` / `turn/end` | turn 边界、结束原因、用量、错误 |
 | `message` | 用户 / assistant / 工具消息 |
-| `llm/request` | 本次请求的 system 文本、按顺序参与的 message id、工具名、参数、fingerprint、估算 token |
+| `llm/request` | 本次请求的 system 文本、按顺序参与的 message id、工具名、参数、fingerprint、估算 token；0.2.3 起可选 `breakdown`（上下文组成，见 11.2） |
 | `llm/response` | 响应消息 id、finishReason、用量（含成本）、尝试次数；0.2.2 起可选 `startedAt`、`firstTokenAt` |
 | `llm/attempt-failed` | 每次失败的尝试；0.2.2 起可选 `startedAt` |
 | `tool/start` / `tool/end` | 0.2.2：工具真正开始 / 结束执行（见 11.1） |
@@ -1027,6 +1027,29 @@ const child = ctx.get('agentLoop').create({
   sessionMeta: { origin: 'sub-agent', parentSessionId: exec.sessionId, parentAgentId: exec.agentId, parentTurnId: exec.turnId, parentToolCallId: exec.callId },
 })
 ```
+
+### 11.2 上下文组成（0.2.3）
+
+上下文观测插件（leo-plugin 的 `context`）要回答“这次请求里 system、工具定义、各插件注入、消息各占多少、离窗口和自动压缩还有多远”。
+`llm/request.data` 只有合并后的 system 全文、工具名和一个总数，事后算不准历史（工具和插件会变），所以 0.2.3 在 `llm/request` 上**新增可选字段** `breakdown`：
+
+```ts
+interface ContextBreakdown {
+  tokenizer: 'approx'                 // 与 estimatedTokens 的本地估算同口径：UTF-8 字节 / 3.5
+  sections: { id: string; layer: PromptLayer; owner: string; tokens: number }[]  // system 片段，按拼接顺序，只列实际注入的
+  tools: Record<string, number>       // 每个工具定义（name + description + 参数 schema）
+  messages: number                    // 发给模型的消息（压缩 / 裁剪之后）
+  contextWindow: number               // 模型窗口，未知时为 defaultContextWindow
+  reserveOutputTokens: number         // 为输出预留
+  limitTokens: number                 // contextWindow - reserveOutputTokens
+  softLimitTokens: number             // limitTokens × softLimitRatio，超过即尝试压缩
+}
+```
+
+- **片段来源** `owner`：`PromptSection` 新增可选 `owner`（插件名）。不填时取 `id` 的第一段（`skills.catalog` → `skills`，`mcp/instructions` → `mcp`），Agent 自带的 system prompt 记为 `agent.system` / `agent`。导出 `sectionOwner()`。
+- 片段之间的 `\n\n` 分隔符算进后一个片段，所以片段合计与 system 全文的估算基本一致。
+- 估算只用于展示比例；真实计费以 `llm/response.usage` 为准（provider 返回的 input / cached / output / reasoning）。
+- `BuiltContext.breakdown` 同样可用；自己替换了 `context` 服务的实现可以不提供，读取方要接受没有 `breakdown` 的日志（0.2.2 及以前全部如此）。
 
 ---
 

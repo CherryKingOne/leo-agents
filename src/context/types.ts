@@ -22,6 +22,11 @@ export interface AssembleInput {
 export interface PromptSection {
   id: string
   layer: PromptLayer
+  /**
+   * 0.2.3：提供该片段的插件名，只用于上下文组成统计（写入 `llm/request.breakdown`）。
+   * 不填时按 id 的第一段推断（`skills.catalog` → `skills`，`mcp/instructions` → `mcp`）
+   */
+  owner?: string
   /** 同层内升序，默认 100 */
   priority?: number
   /** 返回 undefined / 空串表示本次不注入 */
@@ -63,6 +68,24 @@ export interface BuildInput extends AssembleInput {
   signal: AbortSignal
 }
 
+/** 0.2.3：一次请求的上下文组成（全部为本地近似 token，与 `estimatedTokens` 同一口径的字节估算） */
+export interface ContextBreakdown {
+  /** 估算方式：目前固定为 `approx`（UTF-8 字节 / 3.5） */
+  tokenizer: 'approx'
+  /** system prompt 的各个片段，按拼接顺序；只列本次实际注入的（render 返回非空） */
+  sections: { id: string; layer: PromptLayer; owner: string; tokens: number }[]
+  /** 每个工具定义（name + description + 参数 schema）的 token */
+  tools: Record<string, number>
+  /** 发给模型的消息（压缩、裁剪之后）的 token 合计 */
+  messages: number
+  /** 模型窗口（未知时为默认值）、为输出预留的 token、硬上限（窗口 - 预留） */
+  contextWindow: number
+  reserveOutputTokens: number
+  limitTokens: number
+  /** 自动压缩的软阈值（limit × softLimitRatio） */
+  softLimitTokens: number
+}
+
 export interface BuiltContext {
   system: string
   messages: AgentMessage[]
@@ -72,6 +95,8 @@ export interface BuiltContext {
   modelInfo?: ModelInfo
   /** 稳定前缀 + 消息 id 的哈希，用于回放校验与缓存诊断 */
   fingerprint: string
+  /** 0.2.3：上下文组成，调用方写入 `llm/request.breakdown` */
+  breakdown?: ContextBreakdown
   /** 本次构建发生了压缩：调用方应把它写入会话日志 */
   compaction?: { summary: AgentMessage; replacesUpTo: string; strategy: string }
 }
