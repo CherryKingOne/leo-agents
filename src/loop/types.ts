@@ -3,6 +3,7 @@ import type { Context } from '../kernel/context.js'
 import type { TenantContext } from '../kernel/types.js'
 import type { FinishReason, ReasoningOptions, ToolChoice } from '../llm/types.js'
 import type { AgentMessage, ToolCallBlock, Usage, UserInput } from '../protocol/messages.js'
+import type { SessionMeta } from '../session/types.js'
 import type { ToolFilter, ToolResult } from '../tools/types.js'
 
 export interface RunLimits {
@@ -52,6 +53,12 @@ export interface AgentOptions {
   label?: string
   limits?: Partial<RunLimits>
   retry?: Partial<RetryPolicy>
+  /**
+   * 0.2.2，可选：会话元信息（父会话、来源 origin、名字）。提供时，在新会话的第一个 turn 开始前写入一条
+   * `session/meta` 事件（已有 `session/meta` 的会话不重复写）；loop 自动补上 agentId、model，
+   * label 缺省取 `AgentOptions.label`。子 Agent / 团队插件用它让轨迹观测把子会话挂到父会话下
+   */
+  sessionMeta?: SessionMeta
 }
 
 export interface RunOptions extends Partial<RunLimits> {

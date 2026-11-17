@@ -13,6 +13,7 @@ import {
   type Usage,
   type UserInput,
 } from '../protocol/messages.js'
+import type { SessionEventMap, SessionEventType } from '../session/types.js'
 import type { ToolResult } from '../tools/types.js'
 import { StreamAccumulator } from './accumulator.js'
 import { Channel } from './channel.js'
@@ -76,6 +77,7 @@ export class DefaultAgent implements Agent {
   private controller: AbortController | undefined
   private readonly steerQueue: AgentMessage[] = []
   private readonly followUpQueue: AgentMessage[] = []
+  private metaChecked = false
 
   constructor(
     loopCtx: Context<any>,
@@ -188,6 +190,7 @@ export class DefaultAgent implements Agent {
 
     emit({ type: 'turn_start', turnId, sessionId: this.sessionId })
     try {
+      await this.writeSessionMeta()
       await sessions.append(this.sessionId, 'turn/start', { turnId })
       // 空闲时 steer 的消息排在本次输入之前
       for (const m of this.steerQueue.splice(0)) await record(m)
@@ -247,7 +250,25 @@ export class DefaultAgent implements Agent {
             ctx: this.ctx,
             ...(this.options.sequentialTools ? { sequential: true } : {}),
             ...(this.options.tools !== undefined ? { filter: this.options.tools } : {}),
-            onStart: (call) => emit({ type: 'tool_start', call }),
+            onStart: async (call) => {
+              const at = Date.now()
+              emit({ type: 'tool_start', call })
+              await this.safeAppend('tool/start', { turnId, stepId, callId: call.id, name: call.name, messageId: step.message.id, at })
+            },
+            onEnd: async (r, info) => {
+              await this.safeAppend('tool/end', {
+                turnId,
+                stepId,
+                callId: r.callId,
+                name: r.name,
+                isError: r.isError,
+                ...(r.errorCode ? { errorCode: r.errorCode } : {}),
+                ...(r.terminate ? { terminate: true } : {}),
+                durationMs: r.durationMs,
+                startedAt: info.startedAt,
+                endedAt: info.endedAt,
+              })
+            },
             onUpdate: (callId, partial) => emit({ type: 'tool_update', callId, partial }),
           })
           for (const r of results) {
@@ -306,6 +327,32 @@ export class DefaultAgent implements Agent {
     emit({ type: 'turn_end', turnId, reason, usage, steps, ...(errInfo ? { error: errInfo } : {}) })
     const last = [...added].reverse().find((m) => m.role === 'assistant')
     return { turnId, reason, text: last ? textOf(last.content) : '', usage, steps, messages: added, ...(error ? { error } : {}) }
+  }
+
+  /** 轨迹记录写失败不影响本 turn（只记日志） */
+  private async safeAppend<T extends SessionEventType>(type: T, data: SessionEventMap[T]) {
+    try {
+      await this.ctx.get('sessions').append(this.sessionId, type, data)
+    } catch (err) {
+      this.ctx.logger.warn({ err, type }, 'failed to record trajectory event')
+    }
+  }
+
+  /** 提供了 sessionMeta 时，在会话还没有 session/meta 的情况下写入一次 */
+  private async writeSessionMeta() {
+    if (this.metaChecked) return
+    this.metaChecked = true
+    const meta = this.options.sessionMeta
+    if (!meta) return
+    const existing = await this.ctx.get('sessions').events(this.sessionId)
+    if (existing.some((e) => e.type === 'session/meta')) return
+    const label = meta.label ?? this.options.label
+    await this.safeAppend('session/meta', {
+      ...meta,
+      ...(label !== undefined ? { label } : {}),
+      agentId: meta.agentId ?? this.id,
+      model: meta.model ?? this.options.model,
+    })
   }
 
   /** 一个 step：构建上下文 → 记录请求 → 调用模型（带重试） */
@@ -371,8 +418,13 @@ export class DefaultAgent implements Agent {
 
     for (let attempt = 1; ; attempt++) {
       const acc = new StreamAccumulator()
+      const startedAt = Date.now()
+      let firstTokenAt: number | undefined
       try {
         for await (const ev of llm.stream(o.model, request, { signal, ...(o.tenant ? { tenant: o.tenant } : {}) })) {
+          if (firstTokenAt === undefined && (ev.type === 'text_delta' || ev.type === 'reasoning_delta' || ev.type === 'tool_call_delta')) {
+            firstTokenAt = Date.now()
+          }
           acc.push(ev)
           if (ev.type === 'text_delta') emit({ type: 'text_delta', stepId, text: ev.text })
           else if (ev.type === 'reasoning_delta') emit({ type: 'reasoning_delta', stepId, text: ev.text })
@@ -387,7 +439,16 @@ export class DefaultAgent implements Agent {
         const message = acc.toMessage()
         const stepUsage = withCost({ ...emptyUsage(), ...acc.usage }, built.modelInfo)
         const finishReason = acc.finishReason ?? (toolCallsOf(message).length ? 'tool_calls' : 'stop')
-        await sessions.append(this.sessionId, 'llm/response', { turnId, stepId, messageId: message.id, finishReason, usage: stepUsage, attempts: attempt })
+        await sessions.append(this.sessionId, 'llm/response', {
+          turnId,
+          stepId,
+          messageId: message.id,
+          finishReason,
+          usage: stepUsage,
+          attempts: attempt,
+          startedAt,
+          ...(firstTokenAt !== undefined ? { firstTokenAt } : {}),
+        })
         this.ctx.emit('usage/recorded', {
           agentId: this.id,
           sessionId: this.sessionId,
@@ -409,7 +470,7 @@ export class DefaultAgent implements Agent {
           }
           throw new LeoError('cancelled', 'Turn cancelled', { cause: err })
         }
-        await sessions.append(this.sessionId, 'llm/attempt-failed', { turnId, stepId, attempt, code: e.code, message: e.message })
+        await sessions.append(this.sessionId, 'llm/attempt-failed', { turnId, stepId, attempt, code: e.code, message: e.message, startedAt })
         if (e.code === 'context_overflow' || !e.retryable || attempt >= retry.maxAttempts) throw e
         const delayMs = backoff(attempt, retry, e.retryAfterMs)
         this.ctx.logger.warn({ code: e.code, attempt, delayMs }, 'LLM request failed, retrying')

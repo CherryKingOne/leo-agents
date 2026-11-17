@@ -137,8 +137,13 @@ export interface BatchContext {
    */
   filter?: ToolFilter | false
   onUpdate?(callId: string, partial: unknown): void
-  /** 某个工具开始执行时回调（预检通过后） */
-  onStart?(call: ToolCallBlock): void
+  /** 某个工具开始执行时回调（预检通过后）。返回 Promise 时等它完成再执行工具（0.2.2 起会被 await） */
+  onStart?(call: ToolCallBlock): void | Promise<void>
+  /**
+   * 0.2.2：某个已开始的工具执行结束（含 tools/post-execute）时回调，`startedAt` 为开始时间。
+   * 预检未通过、从未开始的调用不回调
+   */
+  onEnd?(result: ToolResult, info: { call: ToolCallBlock; startedAt: number; endedAt: number }): void | Promise<void>
 }
 
 /**

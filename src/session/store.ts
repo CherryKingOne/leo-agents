@@ -1,9 +1,9 @@
-import { appendFile, mkdir, readFile, rm } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { definePlugin } from '../kernel/plugin.js'
 import type { EventDef } from '../kernel/types.js'
 import { type AgentMessage, newId } from '../protocol/messages.js'
-import type { SessionEvent, SessionEventMap, SessionEventType, SessionStore } from './types.js'
+import type { SessionEvent, SessionEventMap, SessionEventType, SessionInfo, SessionStore } from './types.js'
 
 declare module '../kernel/types.js' {
   interface Services {
@@ -27,6 +27,21 @@ export function deriveMessages(events: readonly SessionEvent[]): AgentMessage[] 
   }
   return out
 }
+
+/** 从一个会话的事件列表得出 {@link SessionInfo}；没有事件时返回 undefined */
+export function sessionInfoOf(sessionId: string, events: readonly SessionEvent[]): SessionInfo | undefined {
+  if (!events.length) return undefined
+  const meta = events.find((e) => e.type === 'session/meta')
+  return {
+    sessionId,
+    createdAt: events[0]!.at,
+    updatedAt: events.at(-1)!.at,
+    events: events.length,
+    ...(meta?.type === 'session/meta' ? { meta: meta.data } : {}),
+  }
+}
+
+const byUpdatedDesc = (a: SessionInfo, b: SessionInfo) => b.updatedAt - a.updatedAt
 
 /** 内存会话存储：开发与测试使用，进程重启后丢失 */
 export class InMemorySessionStore implements SessionStore {
@@ -53,6 +68,15 @@ export class InMemorySessionStore implements SessionStore {
 
   async delete(sessionId: string) {
     this.data.delete(sessionId)
+  }
+
+  async list(): Promise<SessionInfo[]> {
+    const out: SessionInfo[] = []
+    for (const [id, events] of this.data) {
+      const info = sessionInfoOf(id, events)
+      if (info) out.push(info)
+    }
+    return out.sort(byUpdatedDesc)
   }
 }
 
@@ -111,6 +135,30 @@ export class FileSessionStore implements SessionStore {
   async delete(sessionId: string) {
     await rm(this.file(sessionId), { force: true })
     this.seq.delete(sessionId)
+  }
+
+  /** 扫描目录下的 `*.jsonl`；读每个文件的全部事件（大目录请换数据库实现）。损坏的文件跳过 */
+  async list(): Promise<SessionInfo[]> {
+    let names: string[]
+    try {
+      names = await readdir(this.dir)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw err
+    }
+    const out: SessionInfo[] = []
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue
+      const id = name.slice(0, -'.jsonl'.length)
+      if (!/^[\w.-]{1,128}$/.test(id)) continue
+      try {
+        const info = sessionInfoOf(id, await this.events(id))
+        if (info) out.push(info)
+      } catch {
+        // 不是合法 JSONL：跳过
+      }
+    }
+    return out.sort(byUpdatedDesc)
   }
 }
 

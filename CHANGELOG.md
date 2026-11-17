@@ -1,5 +1,18 @@
 # 更新日志
 
+## 0.2.2 — 未发布（分支 feat/trajectory-log，待测试后合并）
+
+0.2.2 给会话日志补上**轨迹观测**需要的记录，全部是新增、可选，不改已有接口与事件。配合 leo-plugin 的 `trajectory` 插件可看到完整的耗时与父子会话。
+
+### 新增
+
+- 会话事件 `tool/start`（`{ turnId, stepId, callId, name, messageId, at }`）与 `tool/end`（`{ turnId, stepId, callId, name, isError, errorCode?, terminate?, durationMs, startedAt, endedAt }`）：loop 在每个真正执行的工具前后写入，位于工具结果消息之前。预检阶段就被拒绝的调用不写
+- `llm/response` 新增可选 `startedAt`（成功那次尝试的开始时间）、`firstTokenAt`（首个增量到达时间，TTFT = firstTokenAt - startedAt）；`llm/attempt-failed` 新增可选 `startedAt`。不另设 `step/start`，step 起点即 `llm/request.at`
+- 会话元信息：`AgentOptions.sessionMeta`（`origin`、`label`、`parentSessionId`、`parentAgentId`、`parentTurnId`、`parentToolCallId`、`extra`），新会话第一个 turn 前写一条 `session/meta`（自动补 `agentId`、`model`）；不传则不写，日志与 0.2.1 相同。`agentFactory.create()` 透传
+- `SessionStore.list?()`（可选方法，第三方存储可不实现）：返回 `SessionInfo[]`（`sessionId`、`createdAt`、`updatedAt`、`events`、`meta`），按更新时间倒序；`InMemorySessionStore`、`FileSessionStore` 已实现。导出 `sessionInfoOf()`、`SessionMeta`、`SessionInfo`
+- `BatchContext.onEnd?(result, { call, startedAt, endedAt })`；`BatchContext.onStart` 可以返回 Promise，执行器会等它完成再执行工具
+- 文档：开发指南 11.1「轨迹记录」
+
 ## 0.2.1 — 2026-11-02
 
 0.2.1 给插件补上**和人互动**的两个通用接口：插件能注册斜杠命令，工具结果能带给用户看的展示内容。互动插件 `interaction`（人设、表情包）依赖它们。
