@@ -9,6 +9,7 @@ import {
   type BuildInput,
   type BuiltContext,
   type CompactionStrategy,
+  type ContextBreakdown,
   type ContextService,
   LAYER_ORDER,
   type PromptSection,
@@ -167,22 +168,26 @@ class DefaultContextService implements ContextService {
     return this.strategies[this.strategies.length - 1] ?? truncateStrategy
   }
 
-  private async renderSystem(input: AssembleInput): Promise<string> {
+  private async renderSystem(input: AssembleInput): Promise<{ system: string; sections: ContextBreakdown['sections'] }> {
     const all: PromptSection[] = [...this.sections]
-    if (input.systemPrompt) all.push({ id: 'agent.system', layer: 'agent', priority: 0, render: () => input.systemPrompt })
+    if (input.systemPrompt) all.push({ id: 'agent.system', layer: 'agent', priority: 0, owner: 'agent', render: () => input.systemPrompt })
     all.sort((a, b) => LAYER_ORDER.indexOf(a.layer) - LAYER_ORDER.indexOf(b.layer) || (a.priority ?? 100) - (b.priority ?? 100))
     const parts: string[] = []
+    const sections: ContextBreakdown['sections'] = []
     for (const s of all) {
-      const text = await s.render(input)
-      if (text?.trim()) parts.push(text.trim())
+      const text = (await s.render(input))?.trim()
+      if (!text) continue
+      // 拼接时的 "\n\n" 分隔符算进后一个片段
+      sections.push({ id: s.id, layer: s.layer, owner: sectionOwner(s), tokens: approxTextTokens(parts.length ? `\n\n${text}` : text) })
+      parts.push(text)
     }
-    return parts.join('\n\n')
+    return { system: parts.join('\n\n'), sections }
   }
 
   async build(input: BuildInput): Promise<BuiltContext> {
     const llm = this.ctx.get('llm')
     const resolved = llm.resolve(input.model)
-    const system = await this.renderSystem(input)
+    const { system, sections } = await this.renderSystem(input)
 
     let messages = await this.ctx.waterfall('context/transform', { messages: input.messages, input }, (p) => p.messages)
     messages = await this.ctx.waterfall('context/convert', { messages, input }, (p) =>
@@ -230,7 +235,17 @@ class DefaultContextService implements ContextService {
       .digest('hex')
       .slice(0, 32)
 
-    const built: BuiltContext = { system, messages, tools: input.tools, estimatedTokens: estimated, limitTokens: limit, fingerprint }
+    const breakdown: ContextBreakdown = {
+      tokenizer: 'approx',
+      sections,
+      tools: Object.fromEntries(input.tools.map((t) => [t.name, approxTextTokens(JSON.stringify(t))])),
+      messages: approxTextTokens(JSON.stringify(messages)),
+      contextWindow: window,
+      reserveOutputTokens: reserve,
+      limitTokens: limit,
+      softLimitTokens: Math.floor(limit * this.budget.softLimitRatio),
+    }
+    const built: BuiltContext = { system, messages, tools: input.tools, estimatedTokens: estimated, limitTokens: limit, fingerprint, breakdown }
     if (resolved.info) built.modelInfo = resolved.info
     if (compaction) built.compaction = compaction
     return built
@@ -243,6 +258,17 @@ class DefaultContextService implements ContextService {
     if (starts.length <= keep) return 0
     return starts[starts.length - keep]!
   }
+}
+
+/** 与 `approximateTokens` 同口径：UTF-8 字节 / 3.5 */
+function approxTextTokens(text: string): number {
+  return Math.ceil(Buffer.byteLength(text, 'utf8') / 3.5)
+}
+
+/** 片段来源：显式 owner，否则取 id 第一段（`.` `/` `:` 分隔） */
+export function sectionOwner(section: Pick<PromptSection, 'id' | 'owner'>): string {
+  if (section.owner) return section.owner
+  return section.id.split(/[./:]/)[0] || section.id
 }
 
 /** 真实用户输入（非工具结果、非压缩摘要）开始的位置 */

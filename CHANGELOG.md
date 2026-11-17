@@ -1,5 +1,16 @@
 # 更新日志
 
+## 0.2.3 — 未发布（分支 feat/context-log，待测试后合并）
+
+0.2.3 给会话日志补上**上下文组成**，全部是新增、可选，不改已有接口与事件。配合 leo-plugin 的 `context` 插件可看到每次请求里 system 各片段、工具定义、消息分别占多少，以及离窗口和自动压缩还有多远。
+
+### 新增
+
+- `llm/request` 新增可选 `breakdown`（`ContextBreakdown`）：`sections`（system 片段 `{ id, layer, owner, tokens }`，按拼接顺序）、`tools`（每个工具定义的 token）、`messages`、`contextWindow`、`reserveOutputTokens`、`limitTokens`、`softLimitTokens`、`tokenizer: 'approx'`。估算与 `estimatedTokens` 同口径（UTF-8 字节 / 3.5）
+- `BuiltContext.breakdown`：`context.build()` 的返回值同样带上
+- `PromptSection.owner`（可选）：片段来源插件名；不填时按 id 第一段推断。导出 `sectionOwner()`
+- 文档：开发指南 11.2「上下文组成」
+
 ## 0.2.2 — 未发布（分支 feat/trajectory-log，待测试后合并）
 
 0.2.2 给会话日志补上**轨迹观测**需要的记录，全部是新增、可选，不改已有接口与事件。配合 leo-plugin 的 `trajectory` 插件可看到完整的耗时与父子会话。
